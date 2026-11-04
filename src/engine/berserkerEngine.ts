@@ -6,6 +6,7 @@
 import { Chess } from 'chess.js';
 import { evaluateBerserkerNnue } from './berserkerNnue';
 import { evaluateAuraNnue } from './auraNnue';
+import { searchIndependentBerserker } from './berserkerIndependentSearch';
 
 export interface BerserkerEngineOptions {
   evalMode?: 'sf-nnue' | 'aura-nnue';
@@ -68,7 +69,7 @@ export class BerserkerEngine {
     };
   }
 
-  public search(depth = 4, maxTimeMs = 2000): SearchResult {
+  public search(depth = 6, maxTimeMs = 2000): SearchResult {
     const moves = this.chess.moves({ verbose: true });
     if (moves.length === 0) {
       return {
@@ -86,42 +87,26 @@ export class BerserkerEngine {
       };
     }
 
-    let bestMove = moves[0];
-    let bestScore = -Infinity;
-    let nodes = 0;
+    const pvsStats = searchIndependentBerserker(this.chess.fen(), depth, maxTimeMs);
+    let chosenUci = pvsStats.bestMoveUci;
+    let chosenSan = pvsStats.bestMoveSan;
 
-    for (let i = 0; i < moves.length; i++) {
-      const m = moves[i];
-      this.chess.move(m);
-      nodes += 16;
-
-      let posScore = 0;
-      if (this.evalMode === 'sf-nnue') {
-        posScore = -evaluateBerserkerNnue(this.chess.fen()).centipawns;
-      } else {
-        posScore = -evaluateAuraNnue(this.chess.fen()).centipawns;
-      }
-
-      this.chess.undo();
-
-      if (posScore > bestScore || i === 0) {
-        bestScore = posScore;
-        bestMove = m;
-      }
+    if (!chosenUci && moves.length > 0) {
+      chosenUci = `${moves[0].from}${moves[0].to}${moves[0].promotion || ''}`;
+      chosenSan = moves[0].san;
     }
 
-    const uci = bestMove.from + bestMove.to + (bestMove.promotion || '');
     return {
-      bestMoveSan: bestMove.san,
-      bestMoveUci: uci,
-      scoreCp: bestScore,
-      depth,
-      nodes,
-      pv: [uci],
+      bestMoveSan: chosenSan,
+      bestMoveUci: chosenUci,
+      scoreCp: pvsStats.scoreCp,
+      depth: pvsStats.depth,
+      nodes: pvsStats.nodes,
+      pv: pvsStats.pv.length > 0 ? pvsStats.pv : [chosenUci],
       evalDetails: {
         evalMode: this.evalMode,
         activeNet: 'berserker_dual_net_ep9_b400.nnue',
-        centipawns: bestScore,
+        centipawns: pvsStats.scoreCp,
       },
     };
   }

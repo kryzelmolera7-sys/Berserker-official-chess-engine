@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * BERSERKER 18: STANDALONE UCI CHESS ENGINE (100% PURE & INDEPENDENT)
+ * BERSERKER v0.2.0: STANDALONE UCI CHESS ENGINE (100% PURE & INDEPENDENT)
  * ============================================================================
  * Architecture:
  * - Clean-Room C++17 UCI Chess Engine
@@ -670,7 +670,7 @@ int main() {
         is >> cmd;
 
         if (cmd == "uci") {
-            std::cout << "id name Berserker 18 (HalfKP-Dual-1536 NNUE)" << std::endl;
+            std::cout << "id name Berserker v0.2.0 (NNUE)" << std::endl;
             std::cout << "id author Berserker Independent Team" << std::endl;
             std::cout << "option name Hash type spin default 64 min 1 max 1024" << std::endl;
             std::cout << "option name Threads type spin default 1 min 1 max 64" << std::endl;
