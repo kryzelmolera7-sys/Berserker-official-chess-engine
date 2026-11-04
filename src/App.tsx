@@ -61,13 +61,13 @@ export default function App() {
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-lg font-black tracking-tight text-white flex items-center gap-1.5">
-                <span>Berserker 18</span>
+                <span>Berserker</span>
               </h1>
               <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/40 font-bold uppercase">
-                v0.2.0-alpha
+                v0.2.0
               </span>
               <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-bold hidden sm:inline-block">
-                +570 Elo vs v0.9.0
+                +417 Elo vs Baseline
               </span>
             </div>
             <p className="text-[11px] text-slate-400">

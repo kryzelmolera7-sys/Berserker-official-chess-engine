@@ -1,0 +1,124 @@
+name: Train Berserker v0.2.0 NNUE
+
+on:
+  workflow_dispatch:
+    inputs:
+      games:
+        description: 'Number of autonomous self-play games to generate and bake'
+        required: true
+        default: '100'
+        type: string
+      depth:
+        description: 'Self-play search depth per move (with Quiescence Search)'
+        required: true
+        default: '5'
+        type: string
+      epochs:
+        description: 'Number of NNUE training epochs'
+        required: true
+        default: '10'
+        type: string
+      learning_rate:
+        description: 'Adam optimizer learning rate'
+        required: true
+        default: '0.001'
+        type: string
+      save_to_repo:
+        description: 'Automatically commit and push the newly trained .nnue file to repo'
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  train-nnue:
+    name: Self-Play, Auto-Bake & Train HalfKP NNUE
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+
+      - name: Setup Node.js Environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Setup Python Environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          npm ci || npm install
+          python -m pip install --upgrade pip
+          pip install torch numpy chess tqdm
+
+      - name: Autonomous Self-Play & Auto-Bake Dataset
+        run: |
+          echo "⚔️ Generating and auto-baking ${{ github.event.inputs.games || '100' }} self-play games..."
+          node scripts/generate_and_bake.js \
+            --games ${{ github.event.inputs.games || '100' }} \
+            --depth ${{ github.event.inputs.depth || '5' }} \
+            --movetime 120 \
+            --outdir ./data
+          ls -lh ./data/
+
+      - name: Train HalfKP-Dual-1536 NNUE Network
+        run: |
+          echo "🧠 Training Berserker NNUE network with PyTorch..."
+          python scripts/train_nnue.py \
+            --data data/training_data.plain \
+            --epochs ${{ github.event.inputs.epochs || '10' }} \
+            --lr ${{ github.event.inputs.learning_rate || '0.001' }} \
+            --output berserker_dual_net_ep9_b400.nnue
+
+      - name: Save NNUE into Berserker Engine Paths
+        run: |
+          echo "💾 Saving trained net into Berserker's default neural directories..."
+          mkdir -p public storage
+          cp -v berserker_dual_net_ep9_b400.nnue public/berserker_dual_net_ep9_b400.nnue || true
+          cp -v berserker_dual_net_ep9_b400.nnue storage/berserker_dual_net_ep9_b400.nnue || true
+          ls -lh berserker_dual_net_ep9_b400.nnue
+
+      - name: Verify Engine with Newly Trained NNUE
+        run: |
+          echo "🔍 Verifying engine UCI evaluation with updated net..."
+          node berserker-cli.js << 'EOF'
+          uci
+          isready
+          position startpos
+          eval
+          go depth 3 movetime 300
+          quit
+          EOF
+
+      - name: Upload Trained NNUE & Datasets as Run Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: berserker-v0.2.0-trained-nnue
+          path: |
+            berserker_dual_net_ep9_b400.nnue
+            data/dataset_summary.json
+            data/training_games.pgn
+            data/training_data.bin
+          retention-days: 90
+
+      - name: Commit and Push Trained .nnue into Repository
+        if: ${{ github.event.inputs.save_to_repo != 'false' }}
+        run: |
+          echo "🚀 Committing updated .nnue file back into Berserker repository..."
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add berserker_dual_net_ep9_b400.nnue public/berserker_dual_net_ep9_b400.nnue data/dataset_summary.json 2>/dev/null || true
+          git commit -m "chore(nnue): auto-train and update berserker_dual_net_ep9_b400.nnue [skip ci]" || echo "No changes to commit"
+          git push origin HEAD || echo "Push step finished"
