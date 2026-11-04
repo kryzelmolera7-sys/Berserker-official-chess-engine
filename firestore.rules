@@ -1,0 +1,155 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net: Default deny all unmapped documents
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helper Functions ---
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    // Bootstrapped Admin for app owner
+    function isAdmin() {
+      return isVerified() && request.auth.token.email == 'kate.molera06@gmail.com';
+    }
+
+    // --- SpsaConfig Validation Helper ---
+    function isValidSpsaConfig(data) {
+      return data.keys().hasAll([
+        'aggression',
+        'riskTolerance',
+        'styleWindow',
+        'materialWeight',
+        'mobilityWeight',
+        'kingSafetyWeight',
+        'passedPawnsWeight',
+        'spaceWeight',
+        'tempoBonus',
+        'isPublic'
+      ]) &&
+      data.keys().hasOnly([
+        'id',
+        'aggression',
+        'riskTolerance',
+        'styleWindow',
+        'materialWeight',
+        'mobilityWeight',
+        'kingSafetyWeight',
+        'passedPawnsWeight',
+        'spaceWeight',
+        'tempoBonus',
+        'generation',
+        'isPublic',
+        'updatedBy',
+        'updatedAt'
+      ]) &&
+      data.aggression is number && data.aggression >= 0 && data.aggression <= 500 &&
+      data.riskTolerance is number && data.riskTolerance >= 0 && data.riskTolerance <= 500 &&
+      data.styleWindow is number && data.styleWindow >= 0 && data.styleWindow <= 500 &&
+      data.materialWeight is number && data.materialWeight >= 0 &&
+      data.mobilityWeight is number && data.mobilityWeight >= 0 &&
+      data.kingSafetyWeight is number && data.kingSafetyWeight >= 0 &&
+      data.passedPawnsWeight is number && data.passedPawnsWeight >= 0 &&
+      data.spaceWeight is number && data.spaceWeight >= 0 &&
+      data.tempoBonus is number && data.tempoBonus >= 0 &&
+      data.isPublic is bool &&
+      (!('generation' in data) || (data.generation is number && data.generation >= 0)) &&
+      (!('updatedBy' in data) || (data.updatedBy is string && data.updatedBy.size() <= 128)) &&
+      (!('id' in data) || (data.id is string && data.id.size() <= 128));
+    }
+
+    // --- GameRecord Validation Helper ---
+    function isValidGameRecord(data) {
+      return data.keys().hasAll([
+        'gameMode',
+        'whiteEngine',
+        'blackEngine',
+        'result',
+        'movesCount',
+        'pgn',
+        'fen',
+        'isPublic'
+      ]) &&
+      data.keys().hasOnly([
+        'id',
+        'gameMode',
+        'whiteEngine',
+        'blackEngine',
+        'result',
+        'reason',
+        'movesCount',
+        'pgn',
+        'fen',
+        'isPublic',
+        'userId',
+        'createdAt'
+      ]) &&
+      data.gameMode in ['PlayVsEngine', 'SandboxDuel'] &&
+      data.whiteEngine is string && data.whiteEngine.size() <= 100 &&
+      data.blackEngine is string && data.blackEngine.size() <= 100 &&
+      data.result in ['1-0', '0-1', '1/2-1/2', '*'] &&
+      data.movesCount is number && data.movesCount >= 0 &&
+      data.pgn is string && data.pgn.size() <= 20000 &&
+      data.fen is string && data.fen.size() <= 200 &&
+      data.isPublic is bool &&
+      (!('reason' in data) || (data.reason is string && data.reason.size() <= 200)) &&
+      (!('userId' in data) || (data.userId is string && data.userId.size() <= 128 && (!isSignedIn() || data.userId == request.auth.uid))) &&
+      (!('id' in data) || (data.id is string && data.id.size() <= 128));
+    }
+
+    // --- Collection: /engine_configs/{configId} ---
+    match /engine_configs/{configId} {
+      allow get: if isValidId(configId);
+      allow list: if resource.data.isPublic == true;
+      allow create: if isValidId(configId) && isValidSpsaConfig(incoming());
+      allow update: if isValidId(configId) && isValidSpsaConfig(incoming()) && (
+        isAdmin() || incoming().diff(existing()).affectedKeys().hasOnly([
+          'aggression',
+          'riskTolerance',
+          'styleWindow',
+          'materialWeight',
+          'mobilityWeight',
+          'kingSafetyWeight',
+          'passedPawnsWeight',
+          'spaceWeight',
+          'tempoBonus',
+          'generation',
+          'updatedBy',
+          'updatedAt',
+          'isPublic'
+        ])
+      );
+      allow delete: if isAdmin();
+    }
+
+    // --- Collection: /games/{gameId} ---
+    match /games/{gameId} {
+      allow get: if isValidId(gameId);
+      allow list: if resource.data.isPublic == true;
+      allow create: if isValidId(gameId) && isValidGameRecord(incoming());
+      // Game records are immutable once saved
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
+  }
+}

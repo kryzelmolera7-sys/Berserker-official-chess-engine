@@ -1,0 +1,76 @@
+{
+  "entities": {
+    "SpsaConfig": {
+      "title": "SpsaConfig",
+      "description": "Tuned SPSA parameters and evaluation weights for Berserker engine",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "aggression": { "type": "number" },
+        "riskTolerance": { "type": "number" },
+        "styleWindow": { "type": "number" },
+        "materialWeight": { "type": "number" },
+        "mobilityWeight": { "type": "number" },
+        "kingSafetyWeight": { "type": "number" },
+        "passedPawnsWeight": { "type": "number" },
+        "spaceWeight": { "type": "number" },
+        "tempoBonus": { "type": "number" },
+        "generation": { "type": "number" },
+        "isPublic": { "type": "boolean" },
+        "updatedBy": { "type": "string", "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "aggression",
+        "riskTolerance",
+        "styleWindow",
+        "materialWeight",
+        "mobilityWeight",
+        "kingSafetyWeight",
+        "passedPawnsWeight",
+        "spaceWeight",
+        "tempoBonus",
+        "isPublic"
+      ]
+    },
+    "GameRecord": {
+      "title": "GameRecord",
+      "description": "Completed chess game record with PGN, outcome, and engine parameters",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "gameMode": { "type": "string", "enum": ["PlayVsEngine", "SandboxDuel"] },
+        "whiteEngine": { "type": "string", "maxLength": 100 },
+        "blackEngine": { "type": "string", "maxLength": 100 },
+        "result": { "type": "string", "enum": ["1-0", "0-1", "1/2-1/2", "*"] },
+        "reason": { "type": "string", "maxLength": 200 },
+        "movesCount": { "type": "number" },
+        "pgn": { "type": "string", "maxLength": 20000 },
+        "fen": { "type": "string", "maxLength": 200 },
+        "isPublic": { "type": "boolean" },
+        "userId": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "gameMode",
+        "whiteEngine",
+        "blackEngine",
+        "result",
+        "movesCount",
+        "pgn",
+        "fen",
+        "isPublic"
+      ]
+    }
+  },
+  "firestore": {
+    "/engine_configs/{configId}": {
+      "schema": { "$ref": "#/entities/SpsaConfig" },
+      "description": "Collection of Berserker SPSA parameter profiles and engine tuning configs"
+    },
+    "/games/{gameId}": {
+      "schema": { "$ref": "#/entities/GameRecord" },
+      "description": "Collection of completed chess games from PlayVsEngine and SandboxDuel"
+    }
+  }
+}

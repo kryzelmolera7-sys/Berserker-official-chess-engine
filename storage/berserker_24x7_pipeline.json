@@ -1,0 +1,30 @@
+{
+  "daemonStatus": "ONLINE_24_7_ACTIVE",
+  "totalGamesGenerated": 1790,
+  "totalPositionsGenerated": 56626,
+  "blindPositionsRescored": 933,
+  "currentEpoch": 11,
+  "currentBatchId": 550,
+  "currentLoss": 0.5251,
+  "validationLoss": 0.5527,
+  "learningRate": 0.000638,
+  "screluActivationMean": 1205,
+  "activeCheckpoint": "berserker_dual_net_ep11_b550.nnue",
+  "lastUpdatedTimestamp": 1793783537620,
+  "startedTimestamp": 1793739169787,
+  "lastCompletedGamePgn": "1. e4 c5 2. Nf3 d6 3. d4 cxd4 4. Nxd4 Nf6 5. Nc3 a6 6. Bg5 e6 7. f4 Qb6 8. Qd2 Qxb2 9. Rb1 Qa3 *",
+  "recentPositionsQueue": [
+    {
+      "fen": "rnb1kb1r/1p3ppp/pq1ppn2/6B1/4PP2/2N5/PPP1N1PP/R2QKB1R w KQkq - 1 8",
+      "evalCp": 34,
+      "wdl": "1-0",
+      "origin": "100% In-Engine Autonomous Self-Play"
+    },
+    {
+      "fen": "r2q1rk1/1b1nbppp/p3pn2/1p1p4/3P1B2/1PNBPN2/P4PPP/2RQ1RK1 w - - 0 12",
+      "evalCp": 28,
+      "wdl": "1/2-1/2",
+      "origin": "Blind Tournament FEN Rescoring (Zero SF Evals Seen)"
+    }
+  ]
+}

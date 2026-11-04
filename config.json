@@ -1,0 +1,163 @@
+{
+    "resign": {
+        "move_count": 3,
+        "score": 650,
+        "twosided": false,
+        "enabled": true
+    },
+    "draw": {
+        "move_number": 40,
+        "move_count": 8,
+        "score": 15,
+        "enabled": true
+    },
+    "maxmoves": {
+        "move_count": 1,
+        "enabled": false
+    },
+    "tb_adjudication": {
+        "syzygy_dirs": "",
+        "max_pieces": 0,
+        "ignore_50_move_rule": false,
+        "enabled": false
+    },
+    "opening": {
+        "file": "",
+        "format": 2,
+        "order": 1,
+        "plies": -1,
+        "start": 1
+    },
+    "pgn": {
+        "additional_lines_rgx": [],
+        "event_name": "Fastchess Tournament",
+        "site": "?",
+        "file": "/app/applet/game_10min.pgn",
+        "notation": 0,
+        "append_file": true,
+        "track_nodes": true,
+        "track_seldepth": false,
+        "track_nps": false,
+        "track_hashfull": false,
+        "track_tbhits": false,
+        "track_timeleft": true,
+        "track_latency": true,
+        "track_pv": false,
+        "min": false,
+        "crc": false
+    },
+    "epd": {
+        "file": "",
+        "append_file": true
+    },
+    "sprt": {
+        "alpha": 0.0,
+        "beta": 0.0,
+        "elo0": 0.0,
+        "elo1": 0.0,
+        "model": "normalized",
+        "enabled": false
+    },
+    "config_name": "config.json",
+    "output": 0,
+    "seed": 13911017094373906477,
+    "variant": 0,
+    "type": 0,
+    "gauntlet_seeds": 1,
+    "ratinginterval": 10,
+    "scoreinterval": 1,
+    "wait": 0,
+    "autosaveinterval": 20,
+    "games": 1,
+    "rounds": 1,
+    "concurrency": 1,
+    "force_concurrency": false,
+    "recover": false,
+    "noswap": false,
+    "reverse": false,
+    "report_penta": false,
+    "affinity": false,
+    "check_mate_pvs": false,
+    "show_latency": false,
+    "log": {
+        "file": "/app/applet/game_10min.log",
+        "level": 2,
+        "append_file": true,
+        "compress": false,
+        "realtime": true,
+        "engine_coms": true
+    },
+    "engines": [
+        {
+            "name": "Candidate-1",
+            "dir": "",
+            "cmd": "/app/applet/stockfish-candidate-1",
+            "args": "",
+            "restart": false,
+            "options": [
+                [
+                    "Hash",
+                    "64"
+                ],
+                [
+                    "Threads",
+                    "2"
+                ]
+            ],
+            "limit": {
+                "tc": {
+                    "increment": 0,
+                    "fixed_time": 0,
+                    "time": 600000,
+                    "moves": 0,
+                    "timemargin": 0
+                },
+                "nodes": 0,
+                "plies": 0
+            },
+            "variant": 0
+        },
+        {
+            "name": "Baseline",
+            "dir": "",
+            "cmd": "/app/applet/stockfish-baseline",
+            "args": "",
+            "restart": false,
+            "options": [
+                [
+                    "Hash",
+                    "64"
+                ],
+                [
+                    "Threads",
+                    "2"
+                ]
+            ],
+            "limit": {
+                "tc": {
+                    "increment": 0,
+                    "fixed_time": 0,
+                    "time": 600000,
+                    "moves": 0,
+                    "timemargin": 0
+                },
+                "nodes": 0,
+                "plies": 0
+            },
+            "variant": 0
+        }
+    ],
+    "stats": {
+        "Candidate-1 vs Baseline": {
+            "wins": 0,
+            "losses": 1,
+            "draws": 0,
+            "penta_WW": 0,
+            "penta_WD": 0,
+            "penta_WL": 0,
+            "penta_DD": 0,
+            "penta_LD": 0,
+            "penta_LL": 0
+        }
+    }
+}
