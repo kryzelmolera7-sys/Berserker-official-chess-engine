@@ -16,7 +16,7 @@ The upcoming **`BRnnuev030`** was benchmarked directly against the previous mode
 
 | Metric | BRnnuev030 (Dual NNUE) | Berserker 1.0 NNUE (Previous Model) | Delta / Gain |
 |:---|:---:|:---:|:---:|
-| **Sub-Networks** | **Berserker v0.9.0 + PlentyChess** | Single-Perspective SF Baseline | Dual Accumulator |
+| **Sub-Networks** | **Berserker v0.3.0 + MoE ** | Single-Perspective SF Baseline | Dual Accumulator |
 | **Accumulator Size** | **2 × 1024 int16 (HalfKP + HalfKAv2)** | 1 × 1024 int16 | +100% capacity |
 | **Tournament Score** | **+16 =2 -14 (17.0 / 32.0)** | -16 =2 +14 (15.0 / 32.0) | **+2.0 points** |
 | **Score Rate** | **53.1%** | 46.9% | **+6.2%** |
