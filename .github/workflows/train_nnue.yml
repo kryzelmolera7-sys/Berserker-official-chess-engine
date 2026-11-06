@@ -12,7 +12,7 @@ on:
           - leela
           - selfplay
       dataset_size:
-        description: 'Number of positions/games to prepare (e.g. 5000, 20000, 100000)'
+        description: 'Number of positions/games to prepare (e.g. 10000, 50000, 200000)'
         required: true
         default: '10000'
         type: string
@@ -60,7 +60,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          # Removed cache: 'npm' to prevent lockfile missing error
 
       - name: Setup Python Environment
         uses: actions/setup-python@v5
@@ -101,7 +100,6 @@ jobs:
           git clone --depth 1 https://github.com/official-stockfish/nnue-pytorch.git stockfish_trainer || true
           
           echo "🔥 Training HalfKP-Dual-1536 NNUE architecture..."
-          # Run training with PyTorch
           python scripts/train_nnue.py \
             --data data/training_data.plain \
             --epochs ${{ github.event.inputs.epochs || '10' }} \
