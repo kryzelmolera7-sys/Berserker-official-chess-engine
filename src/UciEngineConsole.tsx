@@ -16,6 +16,7 @@ import {
 import { useBerserkerEngine } from './useBerserkerEngine';
 import { evaluateAuraNnue } from './engine/auraNnue';
 import { evaluateBerserkerNnue } from './engine/berserkerNnue';
+import { evaluateBRnnueV030, evaluateBerserker10Nnue } from './engine/brnnueDualEval';
 
 export const UciEngineConsole: React.FC = () => {
   const {
@@ -35,11 +36,12 @@ export const UciEngineConsole: React.FC = () => {
 
   const [inputCmd, setInputCmd] = useState<string>('uci');
   const [copiedLogs, setCopiedLogs] = useState<boolean>(false);
-  const [activeEvalMode, setActiveEvalMode] = useState<'berserker-nnue' | 'aura-nnue'>('berserker-nnue');
+  const [activeEvalMode, setActiveEvalMode] = useState<'brnnue-v030' | 'berserker-1.0-nnue' | 'aura-nnue'>('brnnue-v030');
   const [customFen, setCustomFen] = useState<string>('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
   const [localLogs, setLocalLogs] = useState<string[]>([
     'Berserker v0.2.0 Standalone Engine Core Initialized.',
-    'Evaluation Engines: Berserker HalfKP-Dual-1536 NNUE & Aura-NNUE (GeoSparse-MoE).',
+    'Default Neural Evaluator: BRnnuev030 (Berserker v0.9.0 + PlentyChess Dual NNUE).',
+    'Baseline Model Available: Berserker 1.0 NNUE.',
     'Type UCI commands below or click quick-actions.',
     '--------------------------------------------------------------------------------'
   ]);
@@ -57,13 +59,23 @@ export const UciEngineConsole: React.FC = () => {
     setLocalLogs((prev) => [...prev, `> ${cmd}`]);
 
     if (cmd === 'eval') {
-      if (activeEvalMode === 'berserker-nnue') {
-        const bszEval = evaluateBerserkerNnue(customFen);
+      if (activeEvalMode === 'brnnue-v030') {
+        const dualEval = evaluateBRnnueV030(customFen);
         setLocalLogs((prev) => [
           ...prev,
-          `[Berserker-NNUE] Eval: ${bszEval.centipawns > 0 ? '+' : ''}${(bszEval.centipawns / 100).toFixed(2)} (${bszEval.centipawns} cp)`,
-          `[Berserker-NNUE] Net: ${bszEval.netId} | SCReLU Sum: ${bszEval.screluActivationSum}`,
-          `[Berserker-NNUE] WDL: Win ${(bszEval.winProb * 100).toFixed(1)}% | Draw ${(bszEval.drawProb * 100).toFixed(1)}% | Loss ${(bszEval.lossProb * 100).toFixed(1)}%`
+          `[BRnnuev030 Dual NNUE] Eval: ${dualEval.centipawns > 0 ? '+' : ''}${(dualEval.centipawns / 100).toFixed(2)} (${dualEval.centipawns} cp)`,
+          `  • Subnet 1 (Berserker v0.9.0 Tactical): ${dualEval.berserker090.centipawns > 0 ? '+' : ''}${(dualEval.berserker090.centipawns / 100).toFixed(2)} (${(dualEval.phaseWeight.berserkerWeight * 100).toFixed(0)}% weight)`,
+          `  • Subnet 2 (PlentyChess Positional):     ${dualEval.plentychess.centipawns > 0 ? '+' : ''}${(dualEval.plentychess.centipawns / 100).toFixed(2)} (${(dualEval.phaseWeight.plentyChessWeight * 100).toFixed(0)}% weight)`,
+          `  • Phase: ${dualEval.phaseWeight.gamePhase} | Tension: ${dualEval.tacticalTensionIndex} pts | Net: ${dualEval.netId}`,
+          `  • WDL: Win ${(dualEval.winProb * 100).toFixed(1)}% | Draw ${(dualEval.drawProb * 100).toFixed(1)}% | Loss ${(dualEval.lossProb * 100).toFixed(1)}%`
+        ]);
+      } else if (activeEvalMode === 'berserker-1.0-nnue') {
+        const bsz10Eval = evaluateBerserker10Nnue(customFen);
+        setLocalLogs((prev) => [
+          ...prev,
+          `[Berserker 1.0 NNUE] Eval: ${bsz10Eval.centipawns > 0 ? '+' : ''}${(bsz10Eval.centipawns / 100).toFixed(2)} (${bsz10Eval.centipawns} cp)`,
+          `[Berserker 1.0 NNUE] Net: ${bsz10Eval.netId} (Previous Single-Perspective Baseline)`,
+          `[Berserker 1.0 NNUE] WDL: Win ${(bsz10Eval.winProb * 100).toFixed(1)}% | Loss ${((1 - bsz10Eval.winProb) * 100).toFixed(1)}%`
         ]);
       } else {
         const auraEval = evaluateAuraNnue(customFen);
@@ -116,35 +128,52 @@ export const UciEngineConsole: React.FC = () => {
         </div>
 
         {/* Dual Eval Mode Toggle */}
-        <div className="flex items-center gap-2 bg-slate-950 p-1.5 rounded-xl border border-slate-800">
-          <span className="text-[11px] text-slate-400 font-semibold px-2">Neural Net:</span>
+        <div className="flex items-center gap-1.5 bg-slate-950 p-1.5 rounded-xl border border-slate-800">
+          <span className="text-[11px] text-slate-400 font-semibold px-2">Net:</span>
           <button
             onClick={() => {
-              setActiveEvalMode('berserker-nnue');
-              setLocalLogs((p) => [...p, '[UCI] Switched evaluator to Berserker HalfKP-Dual-1536 NNUE']);
+              setActiveEvalMode('brnnue-v030');
+              setOption('EvalMode', 'brnnue-v030');
+              setLocalLogs((p) => [...p, '[UCI] Switched evaluator to BRnnuev030 (Berserker v0.9.0 + PlentyChess Dual NNUE)']);
             }}
-            className={`px-3 py-1 rounded-lg text-xs font-mono font-bold transition flex items-center gap-1.5 ${
-              activeEvalMode === 'berserker-nnue'
+            className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold transition flex items-center gap-1.5 ${
+              activeEvalMode === 'brnnue-v030'
                 ? 'bg-purple-600 text-white shadow-md'
                 : 'text-slate-400 hover:text-white'
             }`}
           >
             <Cpu className="w-3.5 h-3.5" />
-            Berserker-NNUE
+            BRnnuev030
+          </button>
+          <button
+            onClick={() => {
+              setActiveEvalMode('berserker-1.0-nnue');
+              setOption('EvalMode', 'berserker-1.0-nnue');
+              setLocalLogs((p) => [...p, '[UCI] Switched evaluator to Berserker 1.0 NNUE (Previous Baseline)']);
+            }}
+            className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold transition flex items-center gap-1.5 ${
+              activeEvalMode === 'berserker-1.0-nnue'
+                ? 'bg-slate-700 text-white shadow-md'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <Layers className="w-3.5 h-3.5" />
+            Berserker 1.0
           </button>
           <button
             onClick={() => {
               setActiveEvalMode('aura-nnue');
+              setOption('EvalMode', 'aura-nnue');
               setLocalLogs((p) => [...p, '[UCI] Switched evaluator to Aura-NNUE (GeoSparse-MoE)']);
             }}
-            className={`px-3 py-1 rounded-lg text-xs font-mono font-bold transition flex items-center gap-1.5 ${
+            className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold transition flex items-center gap-1.5 ${
               activeEvalMode === 'aura-nnue'
                 ? 'bg-amber-600 text-white shadow-md'
                 : 'text-slate-400 hover:text-white'
             }`}
           >
             <Sparkles className="w-3.5 h-3.5" />
-            Aura-NNUE (MoE)
+            Aura-NNUE
           </button>
         </div>
       </div>
@@ -240,7 +269,7 @@ export const UciEngineConsole: React.FC = () => {
             onClick={() => handleSend('eval')}
             className="px-2.5 py-1 rounded bg-purple-950 hover:bg-purple-900 text-purple-300 border border-purple-800 transition font-bold"
           >
-            eval ({activeEvalMode === 'berserker-nnue' ? 'Berserker-NNUE' : 'Aura-NNUE'})
+            eval ({activeEvalMode === 'brnnue-v030' ? 'BRnnuev030' : activeEvalMode === 'berserker-1.0-nnue' ? 'Berserker 1.0' : 'Aura-NNUE'})
           </button>
           <button
             onClick={() => handleSend('position startpos')}

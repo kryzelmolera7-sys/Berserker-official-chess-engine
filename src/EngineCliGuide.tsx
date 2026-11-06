@@ -222,16 +222,21 @@ jobs:
           git commit -m "chore(nnue): train from Leela games & update berserker_dual_net_ep9_b400.nnue [skip ci]" || echo "No changes to commit"
           git push origin HEAD || echo "Push step finished"`;
 
-  const importTsSnippet = `import { searchBestMove, evaluatePosition } from './berserker-cli.js';
+  const importTsSnippet = `import { searchBestMove, evaluatePosition, setEvalMode } from './berserker-cli.js';
 import { Chess } from 'chess.js';
 
 const chess = new Chess();
 
-// 1. Dual neural evaluation (Berserker-NNUE or Aura-NNUE)
-const evalCp = evaluatePosition(chess, 'berserker-nnue');
-console.log('Berserker-NNUE Eval:', evalCp, 'centipawns');
+// 1. Next-Gen Dual NNUE evaluation (BRnnuev030: Berserker v0.9.0 + PlentyChess)
+const brnnueCp = evaluatePosition(chess, 'brnnue-v030');
+console.log('BRnnuev030 Dual Eval:', brnnueCp, 'centipawns');
 
-// 2. Multi-ply PVS Alpha-Beta search with Transposition Table
+// 2. Previous baseline evaluation (Berserker 1.0 NNUE)
+const bsz10Cp = evaluatePosition(chess, 'berserker-1.0-nnue');
+console.log('Berserker 1.0 NNUE Eval:', bsz10Cp, 'centipawns');
+console.log('Delta:', brnnueCp - bsz10Cp, 'cp');
+
+// 3. Multi-ply PVS Alpha-Beta search with Transposition Table
 const result = searchBestMove(chess, 8, 2000);
 console.log('Best Move:', result.bestMoveUci);
 console.log('Score:', result.scoreCp, 'cp');

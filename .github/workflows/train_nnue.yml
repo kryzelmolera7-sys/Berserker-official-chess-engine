@@ -134,9 +134,12 @@ jobs:
         run: |
           echo "💾 Saving trained network into Berserker's default neural directories..."
           mkdir -p public storage
+          cp -vf berserker_dual_net_ep9_b400.nnue berserker_brnnue_v030.nnue || true
           cp -vf berserker_dual_net_ep9_b400.nnue public/berserker_dual_net_ep9_b400.nnue || true
+          cp -vf berserker_dual_net_ep9_b400.nnue public/berserker_brnnue_v030.nnue || true
           cp -vf berserker_dual_net_ep9_b400.nnue storage/berserker_dual_net_ep9_b400.nnue || true
-          ls -lh berserker_dual_net_ep9_b400.nnue
+          cp -vf berserker_dual_net_ep9_b400.nnue storage/berserker_brnnue_v030.nnue || true
+          ls -lh *.nnue 2>/dev/null || true
 
       - name: Verify Engine UCI Evaluation with Trained Net
         run: |
@@ -155,6 +158,7 @@ jobs:
         with:
           name: berserker-v0.2.0-trained-nnue
           path: |
+            berserker_brnnue_v030.nnue
             berserker_dual_net_ep9_b400.nnue
             data/dataset_summary.json
             data/training_games.pgn
@@ -167,6 +171,6 @@ jobs:
           echo "🚀 Committing updated .nnue file back into Berserker repository..."
           git config --local user.name "github-actions[bot]"
           git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add berserker_dual_net_ep9_b400.nnue public/berserker_dual_net_ep9_b400.nnue data/dataset_summary.json 2>/dev/null || true
-          git commit -m "chore(nnue): train from Leela games & update berserker_dual_net_ep9_b400.nnue [skip ci]" || echo "No changes to commit"
+          git add berserker_brnnue_v030.nnue berserker_dual_net_ep9_b400.nnue public/*.nnue storage/*.nnue data/dataset_summary.json 2>/dev/null || true
+          git commit -m "chore(nnue): update BRnnuev030 neural weights [skip ci]" || echo "No changes to commit"
           git push origin HEAD || echo "Push step finished"

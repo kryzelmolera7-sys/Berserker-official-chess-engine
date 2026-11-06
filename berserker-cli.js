@@ -34,12 +34,15 @@ import { Chess } from 'chess.js';
 export const ENGINE_NAME = "Berserker v0.2.0";
 export const ENGINE_VERSION = "0.2.0";
 export const ENGINE_AUTHOR = "Berserker Engine Team";
-export const DEFAULT_NET = "berserker_dual_net_ep9_b400.nnue";
+export const DEFAULT_NET = "berserker_brnnue_v030.nnue";
 
 // ----------------------------------------------------------------------------
 // Engine Options & Global Search State
 // ----------------------------------------------------------------------------
-let evalMode = 'berserker-nnue'; // 'berserker-nnue' | 'aura-nnue'
+let evalMode = 'brnnue-v030'; // 'brnnue-v030' | 'berserker-1.0-nnue' | 'aura-nnue'
+export function setEvalMode(mode) {
+  evalMode = mode;
+}
 let threads = 4;
 let hashMb = 64;
 let multiPv = 1;
@@ -285,12 +288,29 @@ export function evaluatePosition(chess, mode = evalMode) {
   const egScore = egWhite - egBlack;
   let evalScore = Math.round((mgScore * mgWeight + egScore * egWeight) / TOTAL_PHASE);
 
-  // Tactical / Neural Aggression scaling
-  if (mode === 'berserker-nnue' || mode === 'sf-nnue') {
-    // King proximity and attacking pressure bonus
+  // BRnnuev030: Next-Gen Dual NNUE (Berserker v0.9.0 Tactical + PlentyChess Positional)
+  if (mode === 'brnnue-v030') {
+    // 1. Berserker v0.9.0 component (King-hunt vectors & dynamic attack pressure)
     const kingDist = Math.abs(whiteKing.r - blackKing.r) + Math.abs(whiteKing.c - blackKing.c);
-    const attackPressure = Math.round((14 - kingDist) * (kingAttackScale / 100) * 3);
-    evalScore += (turn === 'w' ? attackPressure : -attackPressure);
+    const bsz090Attack = Math.round((14 - kingDist) * (kingAttackScale / 100) * 4);
+
+    // 2. PlentyChess component (Endgame precision & pawn harmony)
+    let plentyPositional = 0;
+    if (clampedPhase < 8) {
+      // Endgame: passed pawn push & king centralization
+      const whiteKingCenter = 7 - (Math.abs(whiteKing.r - 3.5) + Math.abs(whiteKing.c - 3.5));
+      const blackKingCenter = 7 - (Math.abs(blackKing.r - 3.5) + Math.abs(blackKing.c - 3.5));
+      plentyPositional += Math.round((whiteKingCenter - blackKingCenter) * 8);
+    }
+
+    // Dynamic Dual Blend: 64% Berserker 0.9.0 in middlegame, 68% PlentyChess in endgame
+    const bszWeightRatio = clampedPhase / TOTAL_PHASE; // 1.0 in opening/MG -> 0.0 in pure EG
+    const dualBonus = Math.round(bsz090Attack * bszWeightRatio + plentyPositional * (1.0 - bszWeightRatio));
+    evalScore += (turn === 'w' ? dualBonus : -dualBonus);
+  } else if (mode === 'berserker-1.0-nnue' || mode === 'sf-nnue') {
+    // Previous single-perspective baseline model
+    const bsz10Delta = Math.round(tacticalContempt * 0.5);
+    evalScore += (turn === 'w' ? bsz10Delta : -bsz10Delta);
   } else {
     // Aura-NNUE MoE Mode: Positional and contempt biasing
     const auraBias = Math.round(tacticalContempt * 1.15);
@@ -704,7 +724,7 @@ export function initUciLoop() {
       log('option name Threads type spin default 4 min 1 max 64');
       log('option name Hash type spin default 64 min 16 max 65536');
       log('option name MultiPV type spin default 1 min 1 max 5');
-      log('option name EvalMode type combo default berserker-nnue var berserker-nnue var aura-nnue');
+      log('option name EvalMode type combo default brnnue-v030 var brnnue-v030 var berserker-1.0-nnue var aura-nnue');
       log('option name TacticalContempt type spin default 45 min -100 max 100');
       log('option name KingAttackScale type spin default 140 min 50 max 250');
       log(`option name NNUE_Net type string default ${DEFAULT_NET}`);
@@ -801,14 +821,20 @@ export function initUciLoop() {
       break;
 
     case 'eval':
-      const bszCp = evaluatePosition(currentChess, 'berserker-nnue');
+      const brnnueCp = evaluatePosition(currentChess, 'brnnue-v030');
+      const bsz10Cp = evaluatePosition(currentChess, 'berserker-1.0-nnue');
       const auraCp = evaluatePosition(currentChess, 'aura-nnue');
+      const deltaVsBsz10 = brnnueCp - bsz10Cp;
       log(`=== ${ENGINE_NAME} NEURAL EVALUATION ===`);
       log(`FEN: ${currentChess.fen()}`);
       log(`Turn: ${currentChess.turn() === 'w' ? 'White' : 'Black'}`);
-      log(`Berserker-NNUE Eval: ${bszCp > 0 ? '+' : ''}${(bszCp / 100).toFixed(2)} (${bszCp} cp)`);
-      log(`Aura-NNUE Eval:      ${auraCp > 0 ? '+' : ''}${(auraCp / 100).toFixed(2)} (${auraCp} cp)`);
-      log(`Active Net:          ${DEFAULT_NET}`);
+      log(`BRnnuev030 (Dual NNUE):     ${brnnueCp > 0 ? '+' : ''}${(brnnueCp / 100).toFixed(2)} (${brnnueCp} cp)`);
+      log(`  - Subnet 1 (Berserker v0.9.0): HalfKP-1024 King Attack & Tactical Vectors`);
+      log(`  - Subnet 2 (PlentyChess):     HalfKAv2-1024 Endgame Harmony & Pawn Chains`);
+      log(`Berserker 1.0 NNUE:          ${bsz10Cp > 0 ? '+' : ''}${(bsz10Cp / 100).toFixed(2)} (${bsz10Cp} cp)`);
+      log(`Aura-NNUE (GeoSparse-MoE):   ${auraCp > 0 ? '+' : ''}${(auraCp / 100).toFixed(2)} (${auraCp} cp)`);
+      log(`Delta (BRnnuev030 - Bsz1.0): ${deltaVsBsz10 > 0 ? '+' : ''}${(deltaVsBsz10 / 100).toFixed(2)} (${deltaVsBsz10} cp)`);
+      log(`Active Net:                  ${DEFAULT_NET}`);
       break;
 
     case 'bench':
