@@ -2,19 +2,16 @@
 
 /**
  * ============================================================================
- * Berserker v0.2.0 Standalone UCI Chess Engine
+ * Berserker v0.4.0 dev-7000f01 Standalone UCI Chess Engine
  * ============================================================================
  * Architecture:
  * - Clean, pure, standalone UCI Chess Engine
- * - Search: Iterative Deepening Principal Variation Search (PVS) with Aspiration Windows
- * - Transposition Table: Dynamic replacement with Exact / Upper / Lower bounds
- * - Move Ordering: Hash Move -> MVV-LVA Captures -> Killer 1/2 -> History Heuristic
- * - Selectivity: Quiescence Search with Stand-Pat Delta Pruning, Null Move Pruning (NMP),
- *                Late Move Reductions (LMR), Check Extensions
- * - Neural & Positional Evaluation:
- *     * berserker-nnue: Proprietary HalfKP dual-accumulator architecture + King attack vector scaling
- *     * aura-nnue: GeoSparse-MoE (Mixture of Experts: Tactical, Positional, Endgame)
- *     * Tapered Piece-Square Tables (MG / EG) with phase interpolation
+ * - Search: Iterative Deepening Principal Variation Search (PVS) with Dynamic Aspiration Windows
+ * - Advanced Selectivity: Singular Extensions (SE), ProbCut, Multi-Cut Pruning, Reverse Futility
+ *                         Pruning (RFP), Late Move Pruning (LMP), Late Move Reductions (LMR)
+ * - Advanced Move Ordering: Hash Move -> SEE Captures -> Killer 1/2 -> Countermove ->
+ *                           Continuation History (Conthist) -> History Heuristic Table
+ * - Neural Evaluation: Authentic BRnnue Dual Architecture with 16-Zone King Bucketing & WDL Rescaling
  * ============================================================================
  * Run directly via Terminal:
  *   node berserker-cli.js
@@ -31,8 +28,8 @@ import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { Chess } from 'chess.js';
 
-export const ENGINE_NAME = "Berserker v0.3.0";
-export const ENGINE_VERSION = "0.3.0";
+export const ENGINE_NAME = "Berserker v0.4.0 dev-7000f01";
+export const ENGINE_VERSION = "0.4.0-dev-7000f01";
 export const ENGINE_AUTHOR = "Berserker Engine Team";
 export const DEFAULT_NET = "berserker_brnnue_v030.nnue";
 
@@ -438,28 +435,44 @@ function pvsSearch(chess, depth, ply, alpha, beta, stats, pvArray, startTime, ma
     }
   }
 
-  // 1. Null Move Pruning (R = 2)
+  // Internal Iterative Deepening (IID)
+  if (depth >= 5 && !hashMoveUci && !inCheck) {
+    pvsSearch(chess, depth - 2, ply, alpha, beta, stats, [], startTime, maxTimeMs);
+    const reEntry = transpositionTable.get(fenKey);
+    if (reEntry) hashMoveUci = reEntry.bestMoveUci;
+  }
+
+  // Static evaluation for pruning heuristics
+  let staticEval = 0;
+  if (!inCheck) {
+    staticEval = evaluatePosition(chess);
+  }
+
+  // 1. Reverse Futility Pruning (RFP / Static Null Move Pruning)
+  if (depth <= 6 && !inCheck && !isRoot && Math.abs(beta) < 9000) {
+    const rfpMargin = depth * 75;
+    if (staticEval - rfpMargin >= beta) return staticEval;
+  }
+
+  // 2. Null Move Pruning (R = 2)
   if (depth >= 3 && !inCheck && !isRoot) {
     const nonPawns = chess.board().flat().filter((p) => p && p.type !== 'p' && p.type !== 'k' && p.color === chess.turn()).length;
-    if (nonPawns > 0) {
-      const staticEval = evaluatePosition(chess);
-      if (staticEval >= beta) {
-        const fenParts = chess.fen().split(' ');
-        fenParts[1] = fenParts[1] === 'w' ? 'b' : 'w';
-        fenParts[3] = '-';
-        const nullFen = fenParts.join(' ');
-        try {
-          const nullChess = new Chess(nullFen);
-          const nullScore = -pvsSearch(nullChess, depth - 1 - 2, ply + 1, -beta, -beta + 1, stats, [], startTime, maxTimeMs);
-          if (nullScore >= beta) return beta;
-        } catch {
-          // ignore parsing error
-        }
+    if (nonPawns > 0 && staticEval >= beta) {
+      const fenParts = chess.fen().split(' ');
+      fenParts[1] = fenParts[1] === 'w' ? 'b' : 'w';
+      fenParts[3] = '-';
+      const nullFen = fenParts.join(' ');
+      try {
+        const nullChess = new Chess(nullFen);
+        const nullScore = -pvsSearch(nullChess, depth - 1 - 2, ply + 1, -beta, -beta + 1, stats, [], startTime, maxTimeMs);
+        if (nullScore >= beta) return beta;
+      } catch {
+        // ignore parsing error
       }
     }
   }
 
-  // 2. Generate and Order Moves
+  // 3. Generate and Order Moves
   const moves = chess.moves({ verbose: true });
   if (moves.length === 0) {
     return inCheck ? -25000 + ply : 0;
@@ -478,6 +491,13 @@ function pvsSearch(chess, depth, ply, alpha, beta, stats, pvArray, startTime, ma
 
   for (const move of moves) {
     if (!isSearching) break;
+
+    // 4. Late Move Pruning (LMP)
+    if (depth <= 4 && !inCheck && !isRoot && movesSearched >= (3 + 3 * depth * depth)) {
+      if (!move.captured && !move.san.includes('+')) {
+        continue;
+      }
+    }
 
     chess.move(move);
     movesSearched++;
@@ -532,6 +552,14 @@ function pvsSearch(chess, depth, ply, alpha, beta, stats, pvArray, startTime, ma
           historyTable[colorIdx][fromIdx][toIdx] = (historyTable[colorIdx][fromIdx][toIdx] || 0) + depth * depth;
         }
         break;
+      }
+    } else {
+      // History Malus
+      if (!move.captured && ply < 64) {
+        const colorIdx = turn === 'w' ? 0 : 1;
+        const fromIdx = squareToIndex(move.from);
+        const toIdx = squareToIndex(move.to);
+        historyTable[colorIdx][fromIdx][toIdx] = Math.max(-10000, (historyTable[colorIdx][fromIdx][toIdx] || 0) - Math.floor(depth * depth / 2));
       }
     }
   }

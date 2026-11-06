@@ -469,7 +469,7 @@ export function calculateContemptBonus(
 // 5. MULTI-PV CANDIDATE TACTICAL-POSITIONAL HYBRID BLENDING
 // ============================================================================
 /**
- * Reranks top tactical candidate moves from Stockfish 19 WASM using Berserker + Lc0 heuristics.
+ * Reranks top tactical candidate moves from Berserker search using BRnnuev030 + Lc0 heuristics.
  * If candidate moves are tactically within maxDeltaCp (e.g. 40cp) of the top move,
  * the engine chooses the candidate with superior positional squeeze, king pressure,
  * or color complex dominance.

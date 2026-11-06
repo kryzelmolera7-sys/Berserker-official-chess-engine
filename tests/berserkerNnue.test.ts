@@ -49,12 +49,12 @@ test('Berserker NNUE: tactical aggressive bias rewards king attack pressure', ()
   assert.ok(evalResult.tacticalAggressionBonus > 0, 'Berserker should award tactical aggression bonus');
 });
 
-test('Berserker NNUE: compares with Stockfish and Berserker Turbo NNUE', () => {
+test('Berserker NNUE: compares with Berserker 1.0 NNUE baseline and Turbo NNUE', () => {
   const fen = 'r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/2N2N2/PPPP1PPP/R1BQK2R w KQkq - 4 4';
   const comparison = compareNnueNets(fen);
 
   assert.ok(typeof comparison.berserkerNnue.centipawns === 'number');
-  assert.ok(typeof comparison.stockfishNnueCp === 'number');
+  assert.ok(typeof comparison.baselineNnueCp === 'number');
   assert.ok(typeof comparison.berserkerSpeedNnueCp === 'number');
   assert.ok(comparison.tacticalBias);
 });

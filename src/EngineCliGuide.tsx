@@ -39,35 +39,43 @@ eval
 go depth 8 movetime 1000
 quit`;
 
-  const releaseAnnouncementSnippet = `# ⚔️ Berserker v0.3.0 Release — Next-Gen BRnnuev030 Dual NNUE Architecture
+  const releaseAnnouncementSnippet = `# ⚔️ Berserker v0.4.0 dev-7000f01: Advanced Neural Search Architecture
 
-We are thrilled to officially announce the release of **Berserker v0.3.0**!
+We are thrilled to officially announce **Berserker v0.4.0 dev-7000f01**!
 
-This release introduces **BRnnuev030**, our next-generation Dual NNUE architecture fusing Jay Honnold's **Berserker v0.9.0 NNUE** with Ankan Banerjee's **PlentyChess NNUE**, achieving a verified **+22 Elo gain** over the previous **Berserker 1.0 NNUE** baseline model.
+This major release delivers our most powerful native search and neural evaluation overhaul to date, introducing Singular Extensions (SE), Continuation History (Conthist), Static Exchange Evaluation (SEE), ProbCut, Multi-Cut Pruning, 16-Zone Spatial King Bucketing, and Best-Move Stability Time Allocation.
 
 ---
 
-### 🌟 Key Highlights & What's New in v0.3.0:
+### 🌟 What's New in Berserker v0.4.0 dev-7000f01:
 
-1. **BRnnuev030 Dual NNUE Architecture (\`berserker_brnnue_v030.nnue\`)**:
-   - **Subnet 1: Berserker v0.9.0 (Jay Honnold)**: \`HalfKP-1024\` dual perspective accumulator with Squared Clipped ReLU (SCReLU), providing ferocious tactical initiative, king attack vectors, and aggressive piece activity.
-   - **Subnet 2: PlentyChess (Ankan Banerjee)**: \`HalfKAv2-1024\` dual accumulator specializing in endgame piece harmony, pawn chain stability, and technical passed pawn conversion.
-   - **Adaptive Dynamic Gating**: Seamlessly transitions across 24 phase ticks (64% Berserker in opening/middlegame -> 68% PlentyChess in endgames), eliminating tactical blindness while preventing endgame conversion slips.
+1. **Singular Extensions (SE)**:
+   - Deep tactical verification at depth >= 6.
+   - When the principal Transposition Table move dominates all alternative moves by a singular margin (margin = depth * 3 cp) in a reduced search, the search depth is extended by +1 ply, eliminating critical tactical blind spots on forced lines.
 
-2. **Verified Tournament Match (+22 Elo over Berserker 1.0 NNUE)**:
-   - **32 Games Double Round-Robin** across 16 tournament opening & endgame suites:
-   - **Score**: **+16 =2 -14 (17.0 / 32.0, 53.1% Win Rate)**
-   - **Measured Elo Gain**: **+22 Elo Gain** directly over Berserker 1.0 NNUE.
+2. **Multi-Ply Continuation History (Conthist)**:
+   - Implemented via a dedicated 768 x 768 matrix tracking piece-to-square transitions conditioned on the previous move.
+   - Moves with high historical synergy receive up to +25,000 in move ordering, elevating the most effective quiet candidate moves straight to the top of the search list.
 
-3. **Search & Evaluation Upgrades**:
-   - Iterative Deepening Principal Variation Search (PVS) with dynamic Aspiration Windows (±50cp).
-   - Quiescence Search with Stand-Pat Delta Pruning (950cp threshold), eliminating horizon blunders.
-   - Depth-priority Transposition Table (TT) supporting EXACT, LOWERBOUND, and UPPERBOUND bounds.
-   - Advanced 4-stage move ordering: TT Hash Move -> MVV-LVA Captures -> Killer Moves (2 slots) -> History Heuristics.
+3. **Static Exchange Evaluation (SEE) & QSearch Pruning**:
+   - Exact piece exchange simulation on target squares.
+   - Prunes losing captures (negative SEE) in Quiescence search unless checking, and prioritizes winning captures over quiet killers in main search.
 
-4. **Autonomous Self-Play & Automated GitHub Actions Pipeline**:
-   - Standalone autonomous self-play data generator (\`scripts/generate_and_bake.js\`) that automatically generates games and bakes them into Marlinformat (\`.plain\`), packed binary (\`.bin\`), and PGN databases.
-   - 1-click GitHub Actions workflow (\`.github/workflows/train_nnue.yml\`) with automated PyTorch training and automatic \`.nnue\` saving into the engine.
+4. **ProbCut (Probability Cutoff)**:
+   - At depth >= 5, when static evaluation exceeds beta by 180 cp, the engine runs a shallow verification search. If the position holds above the cutoff threshold, the entire subtree is pruned immediately.
+
+5. **Multi-Cut Pruning**:
+   - In non-PV nodes at depth >= 5, when 3 or more candidate moves independently cause a cutoff at reduced depth (depth - 4), search fails high immediately without exploring deeper lines.
+
+6. **16-Zone Spatial King Bucketing & Dynamic Neural Attention**:
+   - Maps king coordinates into 16 mirrored quadrant regions, providing precise spatial context for king-pressure scoring.
+   - Continuous neural attention router dynamically balances tactical aggression against endgame harmony based on open files, piece tension, and king vulnerability.
+
+7. **WDL Rescaling (Win-Draw-Loss Compression)**:
+   - Compresses extreme centipawn spikes (>200 cp) using a hyperbolic tangent sigmoid, preventing the engine from pursuing illusory material advantages into dead-draw fortresses.
+
+8. **Best-Move Stability Time Allocation**:
+   - Dynamic clock manager that allocates up to 90% of budget when the principal variation is unstable across iterations, and exits early (at ~55% of time limit) when the move is decisive.
 
 ---
 
@@ -337,21 +345,21 @@ g++ -O3 -std=c++17 -march=native berserker_standalone/berserker_engine.cpp -o be
         </div>
       </div>
 
-      {/* Official Berserker v0.3.0 Release Announcement */}
+      {/* Official Berserker v0.4.0 dev-7000f01 Release Announcement */}
       <div className="bg-slate-900 border-2 border-purple-500/50 rounded-2xl p-6 shadow-2xl space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-4">
           <div>
             <div className="flex items-center gap-2 mb-1">
               <span className="px-2.5 py-0.5 rounded-full bg-purple-500/20 text-purple-300 font-mono text-[11px] font-bold border border-purple-500/40">
-                OFFICIAL RELEASE
+                OFFICIAL DEV BUILD
               </span>
-              <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-mono text-[11px] font-bold">
-                +22 Elo vs Berserker 1.0 NNUE
+              <span className="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 font-mono text-[11px] font-bold">
+                Singular Extensions + Conthist + SEE
               </span>
             </div>
             <h3 className="text-xl font-extrabold text-white flex items-center gap-2">
               <Award className="w-5 h-5 text-purple-400" />
-              Berserker v0.3.0 Release Announcement (Ready to Copy & Paste)
+              Berserker v0.4.0 dev-7000f01 Release Announcement (Ready to Copy & Paste)
             </h3>
             <p className="text-xs text-slate-400 mt-0.5">
               Copy-paste ready announcement for GitHub Releases, Chess forums, Discord, and engine leaderboards.

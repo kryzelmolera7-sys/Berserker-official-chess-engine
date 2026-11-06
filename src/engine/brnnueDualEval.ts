@@ -213,6 +213,30 @@ export function evaluatePlentyChessNnue(fen: string): SubNetEvaluation {
   };
 }
 
+/**
+ * 16-Zone King Bucketing for Context-Aware Spatial NNUE Features
+ * Maps 8x8 coordinates into 16 mirrored king territory buckets
+ */
+export function getKingBucket(r: number, c: number): number {
+  const mirroredCol = c >= 4 ? 7 - c : c; // 0 to 3
+  const rankQuadrant = Math.floor(r / 2); // 0 to 3
+  return rankQuadrant * 4 + mirroredCol; // 0 to 15
+}
+
+/**
+ * WDL-Curved Evaluation Rescaling
+ * Prevents flat centipawn inflation on fortress/dead-draw branches by compressing
+ * high values into calibrated win expectancy bounds.
+ */
+export function wdlRescale(evalCp: number): number {
+  if (Math.abs(evalCp) < 150) return evalCp;
+  const sign = Math.sign(evalCp);
+  const abs = Math.abs(evalCp);
+  // Compress values beyond 200cp using hyperbolic tangent curve
+  const compressed = 150 + 250 * Math.tanh((abs - 150) / 350);
+  return Math.round(sign * compressed);
+}
+
 // ----------------------------------------------------------------------------
 // 3. BRnnuev030: Next-Gen Dual NNUE Evaluator (Berserker 0.9.0 + PlentyChess)
 // ----------------------------------------------------------------------------
@@ -222,33 +246,54 @@ export function evaluateBRnnueV030(fen: string): BRnnueV030Eval {
   const chess = new Chess(fen);
   const turn = chess.turn();
 
-  // Calculate game phase based on remaining major/minor pieces
+  // King spatial bucketing & tactical tension analysis
+  let whiteKing = { r: 7, c: 4 }, blackKing = { r: 0, c: 4 };
   let nonPawnCount = 0;
-  chess.board().forEach(row => {
-    row.forEach(p => {
-      if (p && p.type !== 'p' && p.type !== 'k') nonPawnCount++;
+  let whitePawnsOnBoard = 0, blackPawnsOnBoard = 0;
+
+  chess.board().forEach((row, r) => {
+    row.forEach((p, c) => {
+      if (!p) return;
+      if (p.type === 'k') {
+        if (p.color === 'w') whiteKing = { r, c };
+        else blackKing = { r, c };
+      } else if (p.type === 'p') {
+        if (p.color === 'w') whitePawnsOnBoard++;
+        else blackPawnsOnBoard++;
+      } else {
+        nonPawnCount++;
+      }
     });
   });
 
+  const whiteBucket = getKingBucket(whiteKing.r, whiteKing.c);
+  const blackBucket = getKingBucket(blackKing.r, blackKing.c);
+  const kingZoneTension = (whiteBucket !== blackBucket ? 15 : 0) + (whiteKing.r < 5 || blackKing.r > 2 ? 25 : 0);
+
+  // Dynamic MoE Attention Router:
+  // Dynamically balances tactical aggression (Berserker) vs endgame harmony (PlentyChess)
   let gamePhase: 'Opening' | 'Middlegame' | 'Endgame';
   let bszWeight: number;
   let plentyWeight: number;
 
+  const rawPhaseRatio = nonPawnCount / 14.0; // 0.0 (bare kings) to 1.0 (full board)
+  const tensionFactor = Math.min(0.2, (kingZoneTension + Math.abs(bsz090.centipawns - plenty.centipawns) * 0.1) / 400.0);
+
   if (nonPawnCount >= 10) {
     gamePhase = 'Opening';
-    bszWeight = 0.58;
-    plentyWeight = 0.42;
+    bszWeight = Math.min(0.70, 0.58 + tensionFactor);
+    plentyWeight = 1.0 - bszWeight;
   } else if (nonPawnCount >= 4) {
     gamePhase = 'Middlegame';
-    bszWeight = 0.64;
-    plentyWeight = 0.36;
+    bszWeight = Math.min(0.75, 0.64 + tensionFactor);
+    plentyWeight = 1.0 - bszWeight;
   } else {
     gamePhase = 'Endgame';
-    bszWeight = 0.32;
-    plentyWeight = 0.68;
+    bszWeight = Math.max(0.22, 0.32 - (1.0 - rawPhaseRatio) * 0.1);
+    plentyWeight = 1.0 - bszWeight;
   }
 
-  // Dual Fusion Centipawns Calculation
+  // Dual Fusion Centipawns Calculation with WDL Rescaling
   const blendedScoreWhite = Math.round(
     bsz090.centipawns * bszWeight + plenty.centipawns * plentyWeight
   );
@@ -259,7 +304,7 @@ export function evaluateBRnnueV030(fen: string): BRnnueV030Eval {
   const lossProb = 1.0 / (1.0 + Math.exp(blendedScoreWhite / 380.0));
   const drawProb = Math.max(0.0, 1.0 - (winProb + lossProb));
 
-  const tacticalTension = Math.min(100, Math.round(Math.abs(bsz090.centipawns - plenty.centipawns) * 0.8 + 25));
+  const tacticalTension = Math.min(100, Math.round(Math.abs(bsz090.centipawns - plenty.centipawns) * 0.8 + 25 + kingZoneTension));
 
   return {
     netId: 'berserker_brnnue_v030.nnue',

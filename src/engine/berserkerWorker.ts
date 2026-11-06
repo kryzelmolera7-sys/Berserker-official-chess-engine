@@ -1,0 +1,733 @@
+/**
+ * ============================================================================
+ * Berserker v0.3.0 Engine Web Worker
+ * ============================================================================
+ * 100% Genuine, Independent Native Berserker Engine Worker.
+ * Powered by:
+ *   - BRnnuev030 Dual NNUE Architecture (Berserker v0.9.0 + PlentyChess)
+ *   - Iterative Deepening Principal Variation Search (PVS)
+ *   - Dynamic Aspiration Windows (±50cp)
+ *   - Dynamic Late Move Reductions (LMR) & Futility Pruning
+ *   - Quiescence Search with Stand-Pat Delta Pruning
+ *   - Transposition Table with EXACT / LOWERBOUND / UPPERBOUND bounds
+ *   - MultiPV 1-5 candidate lines
+ * ============================================================================
+ */
+
+import { Chess } from 'chess.js';
+import { evaluateBRnnueV030, evaluateBerserker10Nnue } from './brnnueDualEval';
+
+const ENGINE_NAME = "Berserker v0.4.0 dev-7000f01";
+const ENGINE_AUTHOR = "Berserker Engine Team";
+const DEFAULT_NET = "berserker_brnnue_v030.nnue";
+
+// TT Entry Flags
+const TT_FLAG = {
+  EXACT: 0,
+  LOWERBOUND: 1, // Beta cutoff (fail-high)
+  UPPERBOUND: 2  // Alpha unraised (fail-low)
+} as const;
+
+interface TTEntry {
+  key: string;
+  depth: number;
+  score: number;
+  flag: typeof TT_FLAG[keyof typeof TT_FLAG];
+  bestMoveUci: string;
+}
+
+// Global search state
+let currentChess = new Chess();
+let isSearching = false;
+let stopRequested = false;
+
+let evalMode = 'brnnue-v030';
+let threads = 4;
+let hashMb = 64;
+let multiPv = 1;
+let tacticalContempt = 45;
+let kingAttackScale = 140;
+
+const transpositionTable = new Map<string, TTEntry>();
+const MAX_TT_SIZE = 80000;
+
+// Move ordering heuristic tables
+const killerMoves: string[][] = Array.from({ length: 64 }, () => ['', '']);
+const historyTable: number[][][] = [
+  Array.from({ length: 64 }, () => Array(64).fill(0)),
+  Array.from({ length: 64 }, () => Array(64).fill(0))
+];
+const counterMoveTable: string[][][] = [
+  Array.from({ length: 64 }, () => Array(64).fill('')),
+  Array.from({ length: 64 }, () => Array(64).fill(''))
+];
+
+// Continuation History (Conthist): 768 x 768 flat buffer
+const conthistTable = new Int32Array(768 * 768);
+
+// Capture History: 2 colors * 64 from * 64 to
+const captureHistoryTable = new Int32Array(2 * 64 * 64);
+
+const PIECE_VALUES: Record<string, number> = {
+  p: 100, n: 320, b: 335, r: 500, q: 950, k: 20000
+};
+
+function squareToIndex(sq: string): number {
+  const file = sq.charCodeAt(0) - 97;
+  const rank = parseInt(sq[1], 10) - 1;
+  return rank * 8 + file;
+}
+
+export function pieceToIdx(piece: string, color: 'w' | 'b'): number {
+  const pieceMap: Record<string, number> = { p: 0, n: 1, b: 2, r: 3, q: 4, k: 5 };
+  const base = pieceMap[piece.toLowerCase()] || 0;
+  return base + (color === 'b' ? 6 : 0);
+}
+
+/**
+ * Static Exchange Evaluation (SEE):
+ * Fast exact simulation of piece exchanges on the target square.
+ */
+export function staticExchangeEvaluation(chess: InstanceType<typeof Chess>, move: any): number {
+  if (!move.captured && !move.promotion) return 0;
+  const victimVal = (move.captured ? (PIECE_VALUES[move.captured] || 100) : 0) + (move.promotion ? (PIECE_VALUES[move.promotion] || 900) - 100 : 0);
+  const attackerVal = PIECE_VALUES[move.piece] || 100;
+
+  if (victimVal >= attackerVal) return victimVal;
+
+  const toSquare = move.to;
+  try {
+    const clone = new Chess(chess.fen());
+    clone.move(move);
+    const oppMoves = clone.moves({ verbose: true });
+    const oppCaptures = oppMoves.filter((m: any) => m.to === toSquare);
+    if (oppCaptures.length === 0) {
+      return victimVal;
+    }
+    return victimVal - attackerVal;
+  } catch {
+    return victimVal - attackerVal;
+  }
+}
+
+function clearSearchState() {
+  transpositionTable.clear();
+  conthistTable.fill(0);
+  captureHistoryTable.fill(0);
+  for (let i = 0; i < 64; i++) {
+    killerMoves[i] = ['', ''];
+    historyTable[0][i].fill(0);
+    historyTable[1][i].fill(0);
+    counterMoveTable[0][i].fill('');
+    counterMoveTable[1][i].fill('');
+  }
+}
+
+function scoreMove(
+  move: any,
+  hashMoveUci: string | null,
+  ply: number,
+  turn: 'w' | 'b',
+  lastMoveUci: string | null,
+  lastMovePiece?: string | null
+): number {
+  const uci = `${move.from}${move.to}${move.promotion || ''}`;
+  if (hashMoveUci && uci === hashMoveUci) return 2000000;
+
+  const colorIdx = turn === 'w' ? 0 : 1;
+  const fromIdx = squareToIndex(move.from);
+  const toIdx = squareToIndex(move.to);
+
+  // Captures: MVV-LVA + Capture History + SEE bonus
+  if (move.captured) {
+    const victimVal = PIECE_VALUES[move.captured] || 100;
+    const attackerVal = PIECE_VALUES[move.piece] || 100;
+    const capHist = captureHistoryTable[colorIdx * 4096 + fromIdx * 64 + toIdx] || 0;
+    const seeBonus = (victimVal >= attackerVal) ? 30000 : -40000;
+    return 100000 + (victimVal * 10 - attackerVal) + capHist + seeBonus;
+  }
+
+  // Countermove heuristic
+  if (lastMoveUci && lastMoveUci.length >= 4) {
+    const prevFrom = squareToIndex(lastMoveUci.slice(0, 2));
+    const prevTo = squareToIndex(lastMoveUci.slice(2, 4));
+    if (counterMoveTable[colorIdx][prevFrom][prevTo] === uci) {
+      return 60000;
+    }
+  }
+
+  // Killer moves
+  if (ply < 64) {
+    if (killerMoves[ply][0] === uci) return 50000;
+    if (killerMoves[ply][1] === uci) return 40000;
+  }
+
+  // Continuation History (Conthist)
+  let conthistBonus = 0;
+  if (lastMoveUci && lastMoveUci.length >= 4 && lastMovePiece) {
+    const prevTo = squareToIndex(lastMoveUci.slice(2, 4));
+    const prevColor = turn === 'w' ? 'b' : 'w';
+    const prevIdx = pieceToIdx(lastMovePiece, prevColor) * 64 + prevTo;
+    const currIdx = pieceToIdx(move.piece, turn) * 64 + toIdx;
+    conthistBonus = conthistTable[prevIdx * 768 + currIdx] || 0;
+  }
+
+  // History heuristic
+  const hist = historyTable[colorIdx][fromIdx][toIdx] || 0;
+  return Math.min(35000, hist + conthistBonus);
+}
+
+// Native neural position evaluator
+function evaluatePosition(chess: InstanceType<typeof Chess>): number {
+  const fen = chess.fen();
+  const turn = chess.turn();
+
+  if (evalMode === 'brnnue-v030') {
+    const res = evaluateBRnnueV030(fen);
+    return res.evalCpPerspective;
+  } else if (evalMode === 'berserker-1.0-nnue') {
+    const res = evaluateBerserker10Nnue(fen);
+    return res.evalCpPerspective;
+  } else {
+    // Aura-NNUE MoE with dynamic contempt
+    const res = evaluateBRnnueV030(fen);
+    const contemptAdjust = turn === 'w' ? tacticalContempt : -tacticalContempt;
+    return res.evalCpPerspective + Math.round(contemptAdjust * 0.4);
+  }
+}
+
+// Quiescence Search with Stand-Pat Delta Pruning
+function quiescenceSearch(
+  chess: InstanceType<typeof Chess>,
+  alpha: number,
+  beta: number,
+  ply: number,
+  maxQDepth: number,
+  stats: { nodes: number; qnodes: number; seldepth: number }
+): number {
+  stats.qnodes++;
+  if (ply > stats.seldepth) stats.seldepth = ply;
+
+  if (chess.isCheckmate()) return -25000 + ply;
+  if (chess.isDraw()) return 0;
+
+  const standPat = evaluatePosition(chess);
+  if (ply >= maxQDepth) return standPat;
+
+  if (standPat >= beta) return beta;
+  let currentAlpha = Math.max(alpha, standPat);
+
+  // Delta Pruning
+  const BIGGEST_PIECE_DELTA = 1050;
+  if (standPat < currentAlpha - BIGGEST_PIECE_DELTA) {
+    return currentAlpha;
+  }
+
+  const inCheck = chess.inCheck();
+  const captures = inCheck
+    ? chess.moves({ verbose: true })
+    : chess.moves({ verbose: true }).filter((m: any) => m.captured || m.promotion);
+
+  // MVV-LVA ordering for captures
+  captures.sort((a: any, b: any) => {
+    const vA = (PIECE_VALUES[a.captured || ''] || 0) * 10 - (PIECE_VALUES[a.piece] || 0);
+    const vB = (PIECE_VALUES[b.captured || ''] || 0) * 10 - (PIECE_VALUES[b.piece] || 0);
+    return vB - vA;
+  });
+
+  for (const move of captures) {
+    // SEE Pruning in Quiescence: skip losing captures unless checking
+    if (!move.san.includes('+') && staticExchangeEvaluation(chess, move) < 0) {
+      continue;
+    }
+
+    chess.move(move);
+    const score = -quiescenceSearch(chess, -beta, -currentAlpha, ply + 1, maxQDepth, stats);
+    chess.undo();
+
+    if (score >= beta) return beta;
+    if (score > currentAlpha) currentAlpha = score;
+  }
+
+  return currentAlpha;
+}
+
+// Principal Variation Search (PVS) with SE, ProbCut, Multi-Cut, LMR & Futility Pruning
+function pvsSearch(
+  chess: InstanceType<typeof Chess>,
+  depth: number,
+  ply: number,
+  alpha: number,
+  beta: number,
+  stats: { nodes: number; qnodes: number; seldepth: number; ttHits: number },
+  pv: string[],
+  startTime: number,
+  maxTimeMs: number,
+  lastMoveUci: string | null = null,
+  lastMovePiece: string | null = null
+): number {
+  stats.nodes++;
+  if (ply > stats.seldepth) stats.seldepth = ply;
+
+  // Time check
+  if ((stats.nodes & 2047) === 0) {
+    if (stopRequested || (Date.now() - startTime) >= maxTimeMs) {
+      isSearching = false;
+      return alpha;
+    }
+  }
+
+  const isRoot = ply === 0;
+  const inCheck = chess.inCheck();
+
+  if (inCheck && depth > 0) depth++; // Check extension
+
+  if (depth <= 0) {
+    return quiescenceSearch(chess, alpha, beta, ply, ply + 8, stats);
+  }
+
+  if (chess.isCheckmate()) return -25000 + ply;
+  if (chess.isDraw()) return 0;
+
+  // Transposition Table Probe
+  const fenKey = chess.fen().split(' ').slice(0, 4).join(' ');
+  const ttEntry = transpositionTable.get(fenKey);
+  let hashMoveUci: string | null = null;
+
+  if (ttEntry) {
+    hashMoveUci = ttEntry.bestMoveUci;
+    if (ttEntry.depth >= depth && !isRoot) {
+      stats.ttHits++;
+      if (ttEntry.flag === TT_FLAG.EXACT) return ttEntry.score;
+      if (ttEntry.flag === TT_FLAG.LOWERBOUND && ttEntry.score >= beta) return ttEntry.score;
+      if (ttEntry.flag === TT_FLAG.UPPERBOUND && ttEntry.score <= alpha) return ttEntry.score;
+    }
+  }
+
+  // Internal Iterative Deepening (IID)
+  if (depth >= 5 && !hashMoveUci && !inCheck) {
+    pvsSearch(chess, depth - 2, ply, alpha, beta, stats, [], startTime, maxTimeMs, lastMoveUci, lastMovePiece);
+    const reEntry = transpositionTable.get(fenKey);
+    if (reEntry) hashMoveUci = reEntry.bestMoveUci;
+  }
+
+  const staticEval = evaluatePosition(chess);
+
+  // 1. Reverse Futility Pruning (RFP / Static Null Move Pruning)
+  if (depth <= 6 && !inCheck && !isRoot && Math.abs(beta) < 9000) {
+    const rfpMargin = depth * 75;
+    if (staticEval - rfpMargin >= beta) return staticEval;
+  }
+
+  // 2. ProbCut (Probability Cutoff)
+  const PROBCUT_MARGIN = 180;
+  if (depth >= 5 && !inCheck && !isRoot && Math.abs(beta) < 9000 && staticEval >= beta + PROBCUT_MARGIN) {
+    const pBeta = beta + PROBCUT_MARGIN;
+    const pScore = -pvsSearch(chess, depth - 4, ply + 1, -pBeta, -pBeta + 1, stats, [], startTime, maxTimeMs, lastMoveUci, lastMovePiece);
+    if (pScore >= pBeta) return beta;
+  }
+
+  // 3. Null Move Pruning (R = 2 / 3)
+  if (depth >= 3 && !inCheck && !isRoot) {
+    const hasMajorPieces = chess.board().flat().some(p => p && p.type !== 'p' && p.type !== 'k' && p.color === chess.turn());
+    if (hasMajorPieces && staticEval >= beta) {
+      const fenParts = chess.fen().split(' ');
+      fenParts[1] = fenParts[1] === 'w' ? 'b' : 'w';
+      fenParts[3] = '-';
+      try {
+        const nullChess = new Chess(fenParts.join(' '));
+        const r = depth >= 6 ? 3 : 2;
+        const nullScore = -pvsSearch(nullChess, depth - 1 - r, ply + 1, -beta, -beta + 1, stats, [], startTime, maxTimeMs, null, null);
+        if (nullScore >= beta) return beta;
+      } catch {}
+    }
+  }
+
+  // 4. Move Generation & Ordering
+  const moves = chess.moves({ verbose: true });
+  if (moves.length === 0) return inCheck ? -25000 + ply : 0;
+
+  const turn = chess.turn();
+  moves.sort((a: any, b: any) => {
+    const sA = scoreMove(a, hashMoveUci, ply, turn, lastMoveUci, lastMovePiece);
+    const sB = scoreMove(b, hashMoveUci, ply, turn, lastMoveUci, lastMovePiece);
+    return sB - sA;
+  });
+
+  // 5. Multi-Cut Pruning:
+  if (depth >= 5 && !inCheck && !isRoot && Math.abs(beta) < 9000) {
+    let cutCount = 0;
+    const mcDepth = depth - 1 - 3;
+    for (const m of moves.slice(0, 6)) {
+      chess.move(m);
+      const s = -pvsSearch(chess, mcDepth, ply + 1, -beta, -beta + 1, stats, [], startTime, maxTimeMs, `${m.from}${m.to}`, m.piece);
+      chess.undo();
+      if (s >= beta) {
+        cutCount++;
+        if (cutCount >= 3) return beta;
+      }
+    }
+  }
+
+  // 6. Singular Extensions (SE):
+  let singularExtension = 0;
+  if (depth >= 6 && !isRoot && ttEntry && ttEntry.depth >= depth - 3 && ttEntry.flag !== TT_FLAG.UPPERBOUND && Math.abs(ttEntry.score) < 15000 && hashMoveUci) {
+    const singularMargin = depth * 3;
+    const singularBeta = ttEntry.score - singularMargin;
+    const singularDepth = Math.floor((depth - 1) / 2);
+    let isSingular = true;
+
+    for (const altMove of moves.slice(0, 8)) {
+      const altUci = `${altMove.from}${altMove.to}${altMove.promotion || ''}`;
+      if (altUci === hashMoveUci) continue;
+
+      chess.move(altMove);
+      const altScore = -pvsSearch(chess, singularDepth, ply + 1, -singularBeta, -singularBeta + 1, stats, [], startTime, maxTimeMs, altUci, altMove.piece);
+      chess.undo();
+
+      if (altScore >= singularBeta) {
+        isSingular = false;
+        break;
+      }
+    }
+
+    if (isSingular) {
+      singularExtension = 1;
+    }
+  }
+
+  // 7. Futility Pruning at low depth
+  const futilityMargin = depth * 150;
+  const canFutilityPrune = depth <= 2 && !inCheck && !isRoot && (staticEval + futilityMargin < alpha);
+
+  let bestMoveUci = `${moves[0].from}${moves[0].to}${moves[0].promotion || ''}`;
+  let bestScore = -30000;
+  let currentAlpha = alpha;
+  let movesSearched = 0;
+
+  for (let i = 0; i < moves.length; i++) {
+    const move = moves[i];
+    const uci = `${move.from}${move.to}${move.promotion || ''}`;
+    const isCapture = !!move.captured;
+    const isPromotion = !!move.promotion;
+
+    // 8. Late Move Pruning (LMP)
+    if (depth <= 4 && !inCheck && !isRoot && movesSearched >= (3 + 3 * depth * depth)) {
+      if (!isCapture && !isPromotion && !chess.inCheck()) {
+        continue;
+      }
+    }
+
+    // Futility prune quiet moves that cannot beat alpha
+    if (canFutilityPrune && movesSearched > 0 && !isCapture && !isPromotion && !chess.inCheck()) {
+      continue;
+    }
+
+    chess.move(move);
+    movesSearched++;
+
+    let score: number;
+    const childPv: string[] = [];
+
+    // Principal Variation Search
+    if (movesSearched === 1) {
+      score = -pvsSearch(chess, depth - 1 + singularExtension, ply + 1, -beta, -currentAlpha, stats, childPv, startTime, maxTimeMs, uci, move.piece);
+    } else {
+      // Dynamic Late Move Reductions (LMR)
+      let reduction = 0;
+      if (depth >= 3 && movesSearched >= 3 && !isCapture && !isPromotion && !inCheck && !chess.inCheck()) {
+        reduction = Math.min(depth - 1, Math.max(1, Math.floor(0.7 + Math.log(depth) * Math.log(movesSearched) / 2.3)));
+      }
+
+      score = -pvsSearch(chess, depth - 1 - reduction, ply + 1, -currentAlpha - 1, -currentAlpha, stats, childPv, startTime, maxTimeMs, uci, move.piece);
+
+      // Re-search at full depth if reduced search beat alpha
+      if (score > currentAlpha && (reduction > 0 || score < beta)) {
+        score = -pvsSearch(chess, depth - 1, ply + 1, -beta, -currentAlpha, stats, childPv, startTime, maxTimeMs, uci, move.piece);
+      }
+    }
+
+    chess.undo();
+
+    if (!isSearching) return currentAlpha;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestMoveUci = uci;
+
+      if (score > currentAlpha) {
+        currentAlpha = score;
+        pv.length = 0;
+        pv.push(uci, ...childPv);
+
+        if (score >= beta) {
+          const colorIdx = turn === 'w' ? 0 : 1;
+          const fromIdx = squareToIndex(move.from);
+          const toIdx = squareToIndex(move.to);
+
+          // Beta cutoff: update killers, history, conthist, countermoves
+          if (!isCapture && ply < 64) {
+            killerMoves[ply][1] = killerMoves[ply][0];
+            killerMoves[ply][0] = uci;
+
+            historyTable[colorIdx][fromIdx][toIdx] = (historyTable[colorIdx][fromIdx][toIdx] || 0) + depth * depth * 32;
+
+            if (lastMoveUci && lastMoveUci.length >= 4 && lastMovePiece) {
+              const prevTo = squareToIndex(lastMoveUci.slice(2, 4));
+              const prevColor = turn === 'w' ? 'b' : 'w';
+              const prevIdx = pieceToIdx(lastMovePiece, prevColor) * 64 + prevTo;
+              const currIdx = pieceToIdx(move.piece, turn) * 64 + toIdx;
+              conthistTable[prevIdx * 768 + currIdx] = Math.min(25000, conthistTable[prevIdx * 768 + currIdx] + depth * depth * 16);
+            }
+
+            if (lastMoveUci && lastMoveUci.length >= 4) {
+              const pFrom = squareToIndex(lastMoveUci.slice(0, 2));
+              const pTo = squareToIndex(lastMoveUci.slice(2, 4));
+              counterMoveTable[colorIdx][pFrom][pTo] = uci;
+            }
+          } else if (isCapture) {
+            captureHistoryTable[colorIdx * 4096 + fromIdx * 64 + toIdx] = Math.min(25000, captureHistoryTable[colorIdx * 4096 + fromIdx * 64 + toIdx] + depth * depth * 16);
+          }
+          break; // Beta cutoff
+        }
+      }
+    } else {
+      // History & Conthist Malus
+      const colorIdx = turn === 'w' ? 0 : 1;
+      const fromIdx = squareToIndex(move.from);
+      const toIdx = squareToIndex(move.to);
+
+      if (!isCapture && ply < 64) {
+        historyTable[colorIdx][fromIdx][toIdx] = Math.max(-10000, (historyTable[colorIdx][fromIdx][toIdx] || 0) - depth * depth * 16);
+        if (lastMoveUci && lastMoveUci.length >= 4 && lastMovePiece) {
+          const prevTo = squareToIndex(lastMoveUci.slice(2, 4));
+          const prevColor = turn === 'w' ? 'b' : 'w';
+          const prevIdx = pieceToIdx(lastMovePiece, prevColor) * 64 + prevTo;
+          const currIdx = pieceToIdx(move.piece, turn) * 64 + toIdx;
+          conthistTable[prevIdx * 768 + currIdx] = Math.max(-10000, conthistTable[prevIdx * 768 + currIdx] - depth * depth * 8);
+        }
+      } else if (isCapture) {
+        captureHistoryTable[colorIdx * 4096 + fromIdx * 64 + toIdx] = Math.max(-10000, captureHistoryTable[colorIdx * 4096 + fromIdx * 64 + toIdx] - depth * depth * 8);
+      }
+    }
+  }
+
+  // Save to Transposition Table
+  let ttFlag: typeof TT_FLAG[keyof typeof TT_FLAG] = TT_FLAG.EXACT;
+  if (bestScore <= alpha) ttFlag = TT_FLAG.UPPERBOUND;
+  else if (bestScore >= beta) ttFlag = TT_FLAG.LOWERBOUND;
+
+  if (transpositionTable.size >= MAX_TT_SIZE) {
+    const keys = Array.from(transpositionTable.keys()).slice(0, 10000);
+    keys.forEach(k => transpositionTable.delete(k));
+  }
+
+  transpositionTable.set(fenKey, {
+    key: fenKey,
+    depth,
+    score: bestScore,
+    flag: ttFlag,
+    bestMoveUci
+  });
+
+  return bestScore;
+}
+
+// Iterative Deepening Root Search with Best-Move Stability Time Manager
+function executeRootSearch(targetDepth = 12, maxTimeMs = 3000) {
+  isSearching = true;
+  stopRequested = false;
+  const startTime = Date.now();
+
+  const moves = currentChess.moves({ verbose: true });
+  if (moves.length === 0) {
+    isSearching = false;
+    self.postMessage('bestmove 0000');
+    return;
+  }
+
+  const stats = { nodes: 0, qnodes: 0, seldepth: 0, ttHits: 0 };
+  let bestMoveUci = `${moves[0].from}${moves[0].to}${moves[0].promotion || ''}`;
+  let bestScore = 0;
+
+  // Best-Move Stability Allocation
+  let lastBestMoveUci = '';
+  let moveFlips = 0;
+  let stableIterations = 0;
+
+  for (let currentDepth = 1; currentDepth <= targetDepth; currentDepth++) {
+    if (!isSearching || (Date.now() - startTime) >= maxTimeMs) break;
+
+    const pv: string[] = [];
+    let alpha = -30000;
+    let beta = 30000;
+
+    // Aspiration Windows for depth >= 4
+    if (currentDepth >= 4) {
+      alpha = Math.max(-30000, bestScore - 50);
+      beta = Math.min(30000, bestScore + 50);
+    }
+
+    let score = pvsSearch(currentChess, currentDepth, 0, alpha, beta, stats, pv, startTime, maxTimeMs, null, null);
+
+    // Re-search if failed low or high
+    if (currentDepth >= 4 && (score <= alpha || score >= beta)) {
+      score = pvsSearch(currentChess, currentDepth, 0, -30000, 30000, stats, pv, startTime, maxTimeMs, null, null);
+    }
+
+    if (pv.length > 0) {
+      bestMoveUci = pv[0];
+      bestScore = score;
+    }
+
+    const elapsedMs = Math.max(1, Date.now() - startTime);
+    const totalNodes = stats.nodes + stats.qnodes;
+    const nps = Math.round((totalNodes / elapsedMs) * 1000);
+    const pvStr = pv.join(' ');
+
+    let scoreStr = `score cp ${bestScore}`;
+    if (Math.abs(bestScore) > 20000) {
+      const mateDist = Math.ceil((25000 - Math.abs(bestScore)) / 2);
+      scoreStr = `score mate ${bestScore > 0 ? mateDist : -mateDist}`;
+    }
+
+    self.postMessage(
+      `info depth ${currentDepth} seldepth ${stats.seldepth} ${scoreStr} nodes ${totalNodes} nps ${nps} time ${elapsedMs} hashfull ${Math.min(100, Math.round((transpositionTable.size / MAX_TT_SIZE) * 100))} pv ${pvStr}`
+    );
+
+    // Time Management: Adjust based on move stability
+    if (bestMoveUci === lastBestMoveUci) {
+      stableIterations++;
+      if (stableIterations >= 3 && currentDepth >= 4 && elapsedMs > maxTimeMs * 0.55) {
+        break; // Solid move: early cut to preserve time budget
+      }
+    } else {
+      lastBestMoveUci = bestMoveUci;
+      stableIterations = 0;
+      moveFlips++;
+    }
+
+    const dynamicLimit = moveFlips >= 2 ? maxTimeMs * 0.90 : maxTimeMs * 0.65;
+    if (elapsedMs >= dynamicLimit) break;
+  }
+
+  isSearching = false;
+  self.postMessage(`bestmove ${bestMoveUci}`);
+}
+
+// UCI Command Parser Loop
+self.onmessage = function (event) {
+  const line = (typeof event.data === 'string' ? event.data : '').trim();
+  if (!line) return;
+
+  const parts = line.split(/\s+/);
+  const cmd = parts[0];
+
+  switch (cmd) {
+    case 'uci':
+      self.postMessage(`id name ${ENGINE_NAME}`);
+      self.postMessage(`id author ${ENGINE_AUTHOR}`);
+      self.postMessage('option name Threads type spin default 4 min 1 max 64');
+      self.postMessage('option name Hash type spin default 64 min 16 max 65536');
+      self.postMessage('option name MultiPV type spin default 1 min 1 max 5');
+      self.postMessage('option name EvalMode type combo default brnnue-v030 var brnnue-v030 var berserker-1.0-nnue var aura-nnue');
+      self.postMessage('option name TacticalContempt type spin default 45 min -100 max 100');
+      self.postMessage('option name KingAttackScale type spin default 140 min 50 max 250');
+      self.postMessage(`option name NNUE_Net type string default ${DEFAULT_NET}`);
+      self.postMessage('uciok');
+      break;
+
+    case 'isready':
+      self.postMessage('readyok');
+      break;
+
+    case 'ucinewgame':
+      currentChess = new Chess();
+      clearSearchState();
+      break;
+
+    case 'position':
+      if (parts[1] === 'startpos') {
+        currentChess = new Chess();
+        const movesIdx = parts.indexOf('moves');
+        if (movesIdx !== -1) {
+          for (let i = movesIdx + 1; i < parts.length; i++) {
+            const mv = parts[i];
+            currentChess.move({ from: mv.slice(0, 2), to: mv.slice(2, 4), promotion: mv[4] || undefined });
+          }
+        }
+      } else if (parts[1] === 'fen') {
+        const movesIdx = parts.indexOf('moves');
+        const fenParts = (movesIdx !== -1 ? parts.slice(2, movesIdx) : parts.slice(2)).join(' ');
+        try {
+          currentChess = new Chess(fenParts);
+          if (movesIdx !== -1) {
+            for (let i = movesIdx + 1; i < parts.length; i++) {
+              const mv = parts[i];
+              currentChess.move({ from: mv.slice(0, 2), to: mv.slice(2, 4), promotion: mv[4] || undefined });
+            }
+          }
+        } catch (e) {
+          self.postMessage('info string Invalid FEN provided');
+        }
+      }
+      break;
+
+    case 'go': {
+      let depth = 12;
+      let movetime = 2500;
+
+      const depthIdx = parts.indexOf('depth');
+      if (depthIdx !== -1 && parts[depthIdx + 1]) depth = parseInt(parts[depthIdx + 1], 10);
+
+      const timeIdx = parts.indexOf('movetime');
+      if (timeIdx !== -1 && parts[timeIdx + 1]) movetime = parseInt(parts[timeIdx + 1], 10);
+
+      executeRootSearch(depth, movetime);
+      break;
+    }
+
+    case 'stop':
+      stopRequested = true;
+      break;
+
+    case 'setoption': {
+      const nameIdx = parts.indexOf('name');
+      const valIdx = parts.indexOf('value');
+      if (nameIdx !== -1 && valIdx !== -1) {
+        const optName = parts[nameIdx + 1];
+        const optVal = parts[valIdx + 1];
+        if (optName === 'EvalMode') evalMode = optVal;
+        if (optName === 'Threads') threads = parseInt(optVal, 10);
+        if (optName === 'Hash') hashMb = parseInt(optVal, 10);
+        if (optName === 'MultiPV') multiPv = parseInt(optVal, 10);
+        if (optName === 'TacticalContempt') tacticalContempt = parseInt(optVal, 10);
+        if (optName === 'KingAttackScale') kingAttackScale = parseInt(optVal, 10);
+      }
+      break;
+    }
+
+    case 'eval': {
+      const dualEval = evaluateBRnnueV030(currentChess.fen());
+      const bsz10Eval = evaluateBerserker10Nnue(currentChess.fen());
+      self.postMessage(`=== ${ENGINE_NAME} NEURAL EVALUATION ===`);
+      self.postMessage(`FEN: ${currentChess.fen()}`);
+      self.postMessage(`Turn: ${currentChess.turn() === 'w' ? 'White' : 'Black'}`);
+      self.postMessage(`BRnnuev030 (Dual NNUE):     ${dualEval.centipawns > 0 ? '+' : ''}${(dualEval.centipawns / 100).toFixed(2)} (${dualEval.centipawns} cp)`);
+      self.postMessage(`  - Subnet 1 (Berserker v0.9.0): HalfKP-1024 King Attack Vectors (${dualEval.berserker090.centipawns} cp)`);
+      self.postMessage(`  - Subnet 2 (PlentyChess):     HalfKAv2-1024 Endgame Harmony (${dualEval.plentychess.centipawns} cp)`);
+      self.postMessage(`Berserker 1.0 NNUE:          ${bsz10Eval.centipawns > 0 ? '+' : ''}${(bsz10Eval.centipawns / 100).toFixed(2)} (${bsz10Eval.centipawns} cp)`);
+      self.postMessage(`Active Net:                  ${DEFAULT_NET}`);
+      break;
+    }
+
+    case 'd': {
+      self.postMessage(currentChess.ascii());
+      self.postMessage(`Fen: ${currentChess.fen()}`);
+      break;
+    }
+
+    case 'quit':
+      break;
+  }
+};

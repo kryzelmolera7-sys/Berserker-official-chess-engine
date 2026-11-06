@@ -125,12 +125,8 @@ export const useBerserkerEngine = (): UseBerserkerEngineReturn & {
     let worker: Worker | null = null;
     try {
       worker = new Worker('/berserker-engine-worker.js');
-    } catch {
-      try {
-        worker = new Worker('/stockfish-19-lite-single.js');
-      } catch (err) {
-        console.error('Failed to initialize Berserker worker', err);
-      }
+    } catch (err) {
+      console.error('Failed to initialize Berserker worker', err);
     }
 
     if (!worker) return;

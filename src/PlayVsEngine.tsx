@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Chess } from 'chess.js';
 import { ChessPiece } from './ChessPiece';
-import { useStockfish } from './useStockfish';
+import { useBerserkerEngine } from './useBerserkerEngine';
 import { 
   Cpu, 
   User, 
@@ -102,7 +102,7 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
     };
   }, []);
   
-  // Real Stockfish 19 WASM Engine with Neural Network Net & MultiPV 3
+  // Native Berserker v0.3.0 Engine with BRnnuev030 Dual NNUE
   const {
     isReady: isWasmReady,
     isSearching: isWasmSearching,
@@ -116,7 +116,7 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
     bestMoveRef: wasmBestMoveRef,
     searchInfoRef: wasmSearchInfoRef,
     multiPvCandidatesRef: wasmMultiPvCandidatesRef
-  } = useStockfish();
+  } = useBerserkerEngine();
 
   // Dynamic thinking time allocation (Defaults to Grandmaster 5.0s, customizable)
   const [thinkingTimeSec, setThinkingTimeSec] = useState<number>(5.0);
@@ -209,8 +209,8 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
   // Turn management: Check if it's engine's turn
   const isEngineTurn = chess.turn() !== playerColor && !chess.isGameOver();
 
-  // Full Unified Master Engine Evaluation (ALL Torch 4 + Ultra-Squeeze + Lc0 + Berserker-NNUE Active)
-  const evaluatePosition = (c: Chess, depthTarget: number = 40, mode: 'berserker-nnue' | 'torch4-ultra' | 'berserker-lc0' | 'stockfish-vanilla' | 'torch4-aggressor' = 'berserker-nnue') => {
+  // Full Unified Master Engine Evaluation (Berserker v0.3.0 BRnnuev030 Dual NNUE + Classical)
+  const evaluatePosition = (c: Chess, depthTarget: number = 40, mode: 'berserker-nnue' | 'torch4-ultra' | 'berserker-lc0' | 'berserker-1.0-baseline' | 'torch4-aggressor' = 'berserker-nnue') => {
     if (c.isCheckmate()) {
       return { 
         score: c.turn() === 'w' ? -2000 : 2000, 
@@ -822,7 +822,7 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
     dispatchEngineMove();
   };
 
-  // Engine Think Loop with Real Stockfish 19 WASM (Customizable Thinking Allocation)
+  // Engine Think Loop with Native Berserker v0.3.0 Engine (Customizable Thinking Allocation)
   useEffect(() => {
     if (!isEngineTurn || gameResult) return;
 
@@ -830,9 +830,9 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
     setThinkingCountdown(thinkingTimeSec);
     setSimulatedNodes(0);
     setSimulatedDepth(1);
-    setSimulatedPv('Berserker 18 dev-7800f00 neural evaluation running...');
+    setSimulatedPv('Berserker v0.3.0 BRnnuev030 dual neural search running...');
 
-    // Trigger Real Stockfish 19 WASM Search
+    // Trigger Native Berserker Engine Search
     const searchMoveTime = Math.max(800, Math.round(thinkingTimeSec * 1000 - 200));
     startWasmSearch(chess.fen(), searchMoveTime);
 
@@ -844,7 +844,7 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
       const remaining = Math.max(0, thinkingTimeSec - elapsed);
       setThinkingCountdown(parseFloat(remaining.toFixed(1)));
 
-      // Pull live telemetry from real Stockfish 19 engine via ref without resetting effect
+      // Pull live telemetry from native Berserker engine via ref without resetting effect
       const currentInfo = wasmSearchInfoRef.current;
       if (currentInfo && currentInfo.depth > 0) {
         setSimulatedDepth(currentInfo.depth);
@@ -1699,9 +1699,9 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <Terminal className="w-4 h-4 text-purple-400" />
-                <h4 className="font-bold text-sm text-white">Live Stockfish 19 UCI Terminal</h4>
+                <h4 className="font-bold text-sm text-white">Live Berserker v0.4.0 dev-7000f01 UCI Terminal</h4>
                 <span className="text-[10px] font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded">
-                  {isWasmReady ? 'READY (NNUE ACTIVE)' : 'INITIALIZING'}
+                  {isWasmReady ? 'READY (BRNNUEV030 DUAL ACTIVE)' : 'INITIALIZING'}
                 </span>
               </div>
               <div className="flex items-center gap-1.5 overflow-x-auto text-xs font-mono">
@@ -1721,7 +1721,7 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
             {/* Terminal Output */}
             <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 font-mono text-xs text-slate-300 h-64 overflow-y-auto space-y-1">
               {wasmRawLogs.length === 0 ? (
-                <p className="text-slate-500 italic">Waiting for Stockfish UCI output...</p>
+                <p className="text-slate-500 italic">Waiting for Berserker UCI output...</p>
               ) : (
                 wasmRawLogs.map((log, i) => (
                   <div key={i} className="leading-relaxed hover:bg-slate-900/50 px-1 rounded">

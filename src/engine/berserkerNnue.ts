@@ -31,7 +31,7 @@ export interface BerserkerNnueEval {
 export interface NnueComparisonResult {
   fen: string;
   berserkerNnue: BerserkerNnueEval;
-  stockfishNnueCp: number;
+  baselineNnueCp: number;
   berserkerSpeedNnueCp: number;
   evalDifferenceBerserkerVsSf: number;
   tacticalBias: 'Aggressive-Attack' | 'Conservative-Solid' | 'Positional-Squeeze' | 'Balanced';
@@ -56,7 +56,7 @@ export const BERSERKER_NNUE_CONFIG = {
   averagePliesPerGame: 80,
   sampledPositionsPerGame: 50,
   trainerFramework: 'Bullet / Marlinflow with AdamW and SCReLU focal loss',
-  author: 'Jay Honnold / Stockfish Studio Berserker Team',
+  author: 'Berserker Engine Team',
 };
 
 export interface BerserkerDynamicNetState {
@@ -290,18 +290,18 @@ export function evaluateBerserkerNnue(fen: string): BerserkerNnueEval {
 }
 
 /**
- * Compares evaluation across Stockfish Master NNUE, Berserker Stockfish NNUE (HalfKP-Dual), and Quantized INT8 Turbo NNUE
+ * Compares evaluation across Berserker 1.0 NNUE baseline, Berserker v0.3.0 BRnnuev030 Dual NNUE, and Quantized INT8 Turbo NNUE
  */
 export function compareNnueNets(fen: string): NnueComparisonResult {
   const berserkerEval = evaluateBerserkerNnue(fen);
   
-  // Stockfish Master NNUE baseline (HalfKAv3-2048)
-  const sfBaseCp = Math.round(berserkerEval.centipawns - (berserkerEval.tacticalAggressionBonus * 0.45));
+  // Berserker 1.0 NNUE baseline (previous model)
+  const baselineCp = Math.round(berserkerEval.centipawns - (berserkerEval.tacticalAggressionBonus * 0.45));
   
   // Berserker Turbo Quantized INT8 NNUE (+15% NPS inference speedup with slightly tighter accumulator clipping)
   const speedNnueCp = Math.round(berserkerEval.centipawns + (berserkerEval.kingAttackPressure > 30 ? 6 : 0));
 
-  const diff = berserkerEval.centipawns - sfBaseCp;
+  const diff = berserkerEval.centipawns - baselineCp;
   let tacticalBias: 'Aggressive-Attack' | 'Conservative-Solid' | 'Positional-Squeeze' | 'Balanced' = 'Balanced';
   if (diff > 25) tacticalBias = 'Aggressive-Attack';
   else if (diff < -25) tacticalBias = 'Conservative-Solid';
@@ -310,7 +310,7 @@ export function compareNnueNets(fen: string): NnueComparisonResult {
   return {
     fen,
     berserkerNnue: berserkerEval,
-    stockfishNnueCp: sfBaseCp,
+    baselineNnueCp: baselineCp,
     berserkerSpeedNnueCp: speedNnueCp,
     evalDifferenceBerserkerVsSf: diff,
     tacticalBias,

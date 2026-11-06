@@ -756,8 +756,9 @@ export function BerserkerNnueInspector() {
 }
 
 const CPP_BERSERKER_NNUE_KERNEL = `// ============================================================================
-// Berserker 18: Authentic HalfKP-Dual-1536 NNUE Evaluator Kernel
-// Author: Jay Honnold / Stockfish Studio Berserker Team
+// Berserker v0.3.0: Authentic BRnnuev030 Dual NNUE Evaluator Kernel
+// Author: Berserker Chess Engine Development Team
+// Architecture: Berserker v0.9.0 + PlentyChess Dual Fusion
 // SIMD Target: AVX2 / AVX-512 VNNI with Squared Clipped ReLU (SCReLU)
 // ============================================================================
 
