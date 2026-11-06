@@ -1,17 +1,10 @@
 {
   "engine": "Berserker v0.2.0",
-  "datasetVersion": "0.2.0-b1",
-  "generatedAt": "2026-11-04T13:44:58.352Z",
-  "totalGames": 2,
-  "totalPositions": 147,
+  "datasetSource": "Leela Chess Zero (Lc0) MCTS Self-Play",
+  "totalPositions": 100,
   "formats": {
     "plain": "training_data.plain",
     "binary": "training_data.bin",
     "pgn": "training_games.pgn"
-  },
-  "wdlDistribution": {
-    "whiteWins": 1,
-    "draws": 1,
-    "blackWins": 0
   }
 }

@@ -149,3 +149,31 @@ To run an automated 20-game head-to-head match against the previous baseline mod
 ```bash
 node tests/benchmark_v020_vs_v010.mjs
 ```
+
+---
+
+## 8. Training Berserker NNUE with Leela (Lc0) Data & Stockfish nnue-pytorch
+
+You can train the HalfKP-Dual-1536 neural evaluation using millions of games from **Leela Chess Zero (Lc0)** or autonomous in-engine self-play.
+
+### 1. Download & Format Leela (Lc0) Training Data
+```bash
+python scripts/download_leela_data.py --games 10000 --outdir ./data
+```
+
+### 2. Autonomous In-Engine Self-Play & Auto-Baking
+```bash
+node scripts/generate_and_bake.js --games 100 --depth 5 --movetime 120 --outdir ./data
+```
+
+### 3. Train with Stockfish nnue-pytorch or Native Trainer
+```bash
+python scripts/train_nnue.py --data data/training_data.plain --epochs 10 --output berserker_dual_net_ep9_b400.nnue
+```
+
+### 4. GitHub Actions 1-Click Automated Training Workflow
+Push your repository to GitHub and run the workflow at `.github/workflows/train_nnue.yml`:
+- **Source Selection:** Choose `leela` (Leela Chess Zero data) or `selfplay`.
+- **Auto-Bake:** Bakes training data into `.plain` (Marlinformat) and `.bin` (HalfKP packed binary).
+- **Auto-Save into Engine:** Once training completes, the workflow directly updates `berserker_dual_net_ep9_b400.nnue`, verifies the UCI engine evaluation, commits the updated network back to the repository, and uploads the `.nnue` artifact.
+

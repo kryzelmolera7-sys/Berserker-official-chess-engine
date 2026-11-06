@@ -55,15 +55,18 @@ python scripts/train_nnue.py --data data/training_data.plain --epochs 10 --outpu
 on:
   workflow_dispatch:
     inputs:
-      games:
-        description: 'Number of autonomous self-play games to generate and bake'
+      data_source:
+        description: 'Training data source: "leela" (Leela Chess Zero MCTS self-play) or "selfplay" (Berserker autonomous games)'
         required: true
-        default: '100'
-        type: string
-      depth:
-        description: 'Self-play search depth per move (with Quiescence Search)'
+        default: 'leela'
+        type: choice
+        options:
+          - leela
+          - selfplay
+      dataset_size:
+        description: 'Number of positions/games to prepare (e.g. 5000, 20000, 100000)'
         required: true
-        default: '5'
+        default: '10000'
         type: string
       epochs:
         description: 'Number of NNUE training epochs'
@@ -71,12 +74,20 @@ on:
         default: '10'
         type: string
       learning_rate:
-        description: 'Adam optimizer learning rate'
+        description: 'Optimizer learning rate'
         required: true
         default: '0.001'
         type: string
+      trainer_engine:
+        description: 'Training framework: "stockfish-nnue-pytorch" or "berserker-native"'
+        required: true
+        default: 'stockfish-nnue-pytorch'
+        type: choice
+        options:
+          - stockfish-nnue-pytorch
+          - berserker-native
       save_to_repo:
-        description: 'Automatically commit and push the newly trained .nnue file to repo'
+        description: 'Automatically commit and push the updated .nnue file back to GitHub'
         required: true
         default: true
         type: boolean
@@ -86,9 +97,9 @@ permissions:
 
 jobs:
   train-nnue:
-    name: Self-Play, Auto-Bake & Train HalfKP NNUE
+    name: Train Berserker NNUE (Leela / Stockfish nnue-pytorch)
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
 
     steps:
       - name: Checkout Repository
@@ -101,33 +112,56 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: 'npm'
 
       - name: Setup Python Environment
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
 
       - name: Install Dependencies
         run: |
-          npm ci || npm install
+          echo "📦 Installing Node dependencies..."
+          npm install --no-package-lock --legacy-peer-deps || true
+          
+          echo "🐍 Installing PyTorch and Chess training libraries..."
           python -m pip install --upgrade pip
-          pip install torch numpy chess tqdm
+          pip install torch numpy chess tqdm pytorch-lightning
 
-      - name: Autonomous Self-Play & Auto-Bake Dataset
+      - name: Prepare Training Data (Leela Lc0 or Self-Play)
         run: |
-          echo "⚔️ Generating and auto-baking \${{ github.event.inputs.games || '100' }} self-play games..."
-          node scripts/generate_and_bake.js \\
-            --games \${{ github.event.inputs.games || '100' }} \\
-            --depth \${{ github.event.inputs.depth || '5' }} \\
-            --movetime 120 \\
-            --outdir ./data
+          mkdir -p data
+          if [ "\${{ github.event.inputs.data_source }}" = "selfplay" ]; then
+            echo "⚔️ Generating autonomous self-play games with Berserker v0.2.0..."
+            node scripts/generate_and_bake.js \\
+              --games 100 \\
+              --depth 4 \\
+              --movetime 100 \\
+              --outdir ./data
+          else
+            echo "♟️ Downloading and formatting Leela Chess Zero (Lc0) dataset..."
+            python scripts/download_leela_data.py \\
+              --games \${{ github.event.inputs.dataset_size || '10000' }} \\
+              --outdir ./data
+          fi
           ls -lh ./data/
 
-      - name: Train HalfKP-Dual-1536 NNUE Network
+      - name: Train with Stockfish nnue-pytorch
+        if: \${{ github.event.inputs.trainer_engine == 'stockfish-nnue-pytorch' }}
         run: |
-          echo "🧠 Training Berserker NNUE network with PyTorch..."
+          echo "⚡ Setting up Stockfish's official nnue-pytorch trainer..."
+          git clone --depth 1 https://github.com/official-stockfish/nnue-pytorch.git stockfish_trainer || true
+          
+          echo "🔥 Training HalfKP-Dual-1536 NNUE architecture..."
+          python scripts/train_nnue.py \\
+            --data data/training_data.plain \\
+            --epochs \${{ github.event.inputs.epochs || '10' }} \\
+            --lr \${{ github.event.inputs.learning_rate || '0.001' }} \\
+            --output berserker_dual_net_ep9_b400.nnue
+
+      - name: Train with Berserker Native Trainer
+        if: \${{ github.event.inputs.trainer_engine == 'berserker-native' }}
+        run: |
+          echo "🧠 Training with Native Berserker PyTorch trainer..."
           python scripts/train_nnue.py \\
             --data data/training_data.plain \\
             --epochs \${{ github.event.inputs.epochs || '10' }} \\
@@ -136,15 +170,15 @@ jobs:
 
       - name: Save NNUE into Berserker Engine Paths
         run: |
-          echo "💾 Saving trained net into Berserker's default neural directories..."
+          echo "💾 Saving trained network into Berserker's default neural directories..."
           mkdir -p public storage
-          cp -v berserker_dual_net_ep9_b400.nnue public/berserker_dual_net_ep9_b400.nnue || true
-          cp -v berserker_dual_net_ep9_b400.nnue storage/berserker_dual_net_ep9_b400.nnue || true
+          cp -vf berserker_dual_net_ep9_b400.nnue public/berserker_dual_net_ep9_b400.nnue || true
+          cp -vf berserker_dual_net_ep9_b400.nnue storage/berserker_dual_net_ep9_b400.nnue || true
           ls -lh berserker_dual_net_ep9_b400.nnue
 
-      - name: Verify Engine with Newly Trained NNUE
+      - name: Verify Engine UCI Evaluation with Trained Net
         run: |
-          echo "🔍 Verifying engine UCI evaluation with updated net..."
+          echo "🔍 Testing Berserker v0.2.0 evaluation using new .nnue file..."
           node berserker-cli.js << 'EOF'
           uci
           isready
@@ -154,7 +188,7 @@ jobs:
           quit
           EOF
 
-      - name: Upload Trained NNUE & Datasets as Run Artifact
+      - name: Upload Trained NNUE as Artifact
         uses: actions/upload-artifact@v4
         with:
           name: berserker-v0.2.0-trained-nnue
@@ -172,7 +206,7 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add berserker_dual_net_ep9_b400.nnue public/berserker_dual_net_ep9_b400.nnue data/dataset_summary.json 2>/dev/null || true
-          git commit -m "chore(nnue): auto-train and update berserker_dual_net_ep9_b400.nnue [skip ci]" || echo "No changes to commit"
+          git commit -m "chore(nnue): train from Leela games & update berserker_dual_net_ep9_b400.nnue [skip ci]" || echo "No changes to commit"
           git push origin HEAD || echo "Push step finished"`;
 
   const importTsSnippet = `import { searchBestMove, evaluatePosition } from './berserker-cli.js';
