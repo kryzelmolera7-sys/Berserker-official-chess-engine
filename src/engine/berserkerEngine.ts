@@ -8,8 +8,10 @@ import { evaluateBerserkerNnue } from './berserkerNnue';
 import { evaluateAuraNnue } from './auraNnue';
 import { searchIndependentBerserker } from './berserkerIndependentSearch';
 
+export type BerserkerEvalMode = 'berserker-nnue' | 'aura-nnue' | 'sf-nnue';
+
 export interface BerserkerEngineOptions {
-  evalMode?: 'sf-nnue' | 'aura-nnue';
+  evalMode?: BerserkerEvalMode;
   threads?: number;
   hashMb?: number;
   contempt?: number;
@@ -24,7 +26,7 @@ export interface SearchResult {
   nodes: number;
   pv: string[];
   evalDetails: {
-    evalMode: 'sf-nnue' | 'aura-nnue';
+    evalMode: BerserkerEvalMode;
     activeNet: string;
     centipawns: number;
   };
@@ -32,13 +34,13 @@ export interface SearchResult {
 
 export class BerserkerEngine {
   private chess: Chess;
-  private evalMode: 'sf-nnue' | 'aura-nnue';
+  private evalMode: BerserkerEvalMode;
   private contempt: number;
   private kingAttackScale: number;
 
   constructor(options: BerserkerEngineOptions = {}) {
     this.chess = new Chess();
-    this.evalMode = options.evalMode || 'sf-nnue';
+    this.evalMode = options.evalMode || 'berserker-nnue';
     this.contempt = options.contempt ?? 45;
     this.kingAttackScale = options.kingAttackScale ?? 140;
   }
@@ -55,15 +57,17 @@ export class BerserkerEngine {
   }
 
   public evaluateCurrentPosition(): {
+    berserkerNnueCp: number;
     sfNnueCp: number;
     auraNnueCp: number;
-    activeMode: 'sf-nnue' | 'aura-nnue';
+    activeMode: BerserkerEvalMode;
   } {
     const fen = this.chess.fen();
-    const sfEval = evaluateBerserkerNnue(fen);
+    const bszEval = evaluateBerserkerNnue(fen);
     const auraEval = evaluateAuraNnue(fen);
     return {
-      sfNnueCp: sfEval.centipawns,
+      berserkerNnueCp: bszEval.centipawns,
+      sfNnueCp: bszEval.centipawns,
       auraNnueCp: auraEval.centipawns,
       activeMode: this.evalMode,
     };

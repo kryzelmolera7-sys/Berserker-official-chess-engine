@@ -1,6 +1,6 @@
 # Berserker v0.2.0 — Standalone UCI Chess Engine
 
-A high-performance, standalone UCI chess engine powered by **Stockfish NNUE** and **Aura-NNUE (GeoSparse-MoE)** neural evaluation paired with an advanced **Principal Variation Search (PVS)** engine.
+A high-performance, standalone UCI chess engine powered by **Berserker-NNUE** and **Aura-NNUE (GeoSparse-MoE)** neural evaluation paired with an advanced **Principal Variation Search (PVS)** engine.
 
 ---
 
@@ -16,7 +16,7 @@ A high-performance, standalone UCI chess engine powered by **Stockfish NNUE** an
   - **Advanced Move Ordering:** Hash Move (TT best move) $\to$ MVV-LVA Captures (Most Valuable Victim - Least Valuable Attacker) $\to$ Killer Moves (2 slots per ply) $\to$ History Heuristic Table.
 
 - **Dual Neural & Positional Evaluation:**
-  - **Stockfish NNUE (`sf-nnue`):** HalfKP-Dual-1536 architecture with king attack vector pressure scaling.
+  - **Berserker-NNUE (`berserker-nnue`):** Proprietary HalfKP-Dual-1536 architecture with king attack vector pressure scaling.
   - **Aura-NNUE (`aura-nnue`):** GeoSparse Mixture-of-Experts with tactical aggression contempt.
   - **Tapered Piece-Square Tables (PST):** Interpolates between 64-square Middlegame (MG) and Endgame (EG) tables based on non-pawn material phase ($0 \dots 24$).
 
@@ -96,8 +96,8 @@ import { searchBestMove, evaluatePosition } from './berserker-cli.js';
 const chess = new Chess();
 
 // Evaluate starting position
-const sfScore = evaluatePosition(chess, 'sf-nnue');
-console.log('Evaluation (cp):', sfScore);
+const bszScore = evaluatePosition(chess, 'berserker-nnue');
+console.log('Evaluation (cp):', bszScore);
 
 // Search position to depth 6
 const result = searchBestMove(chess, 6, 2000);
@@ -120,7 +120,7 @@ position fen <FEN> moves  -> Sets custom FEN position and applies move history
 go depth <N>              -> Searches to fixed depth N
 go movetime <MS>          -> Searches for allocated time in milliseconds
 go wtime <W> btime <B>    -> Calculates move time allocation based on remaining clock
-eval                      -> Displays breakdown of SF NNUE and Aura-NNUE evaluations
+eval                      -> Displays breakdown of Berserker-NNUE and Aura-NNUE evaluations
 bench                     -> Runs standard 5-position benchmark suite
 stop                      -> Halts search immediately and outputs bestmove
 quit                      -> Exits the engine process
@@ -132,7 +132,7 @@ quit                      -> Exits the engine process
 
 | Option Name | Type | Default | Range | Description |
 |:---|:---:|:---:|:---:|:---|
-| `EvalMode` | combo | `sf-nnue` | `sf-nnue`, `aura-nnue` | Selects between Stockfish NNUE and Aura-NNUE |
+| `EvalMode` | combo | `berserker-nnue` | `berserker-nnue`, `aura-nnue` | Selects between Berserker-NNUE and Aura-NNUE |
 | `Threads` | spin | `4` | `1` - `64` | CPU search worker threads |
 | `Hash` | spin | `64` | `16` - `65536` | Transposition table size in MB |
 | `MultiPV` | spin | `1` | `1` - `5` | Number of candidate move lines to output |

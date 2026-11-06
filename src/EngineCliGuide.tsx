@@ -145,18 +145,31 @@ jobs:
           fi
           ls -lh ./data/
 
-      - name: Train with Stockfish nnue-pytorch
+      - name: Train with Official Stockfish nnue-pytorch
         if: \${{ github.event.inputs.trainer_engine == 'stockfish-nnue-pytorch' }}
         run: |
-          echo "⚡ Setting up Stockfish's official nnue-pytorch trainer..."
-          git clone --depth 1 https://github.com/official-stockfish/nnue-pytorch.git stockfish_trainer || true
-          
-          echo "🔥 Training HalfKP-Dual-1536 NNUE architecture..."
-          python scripts/train_nnue.py \\
-            --data data/training_data.plain \\
-            --epochs \${{ github.event.inputs.epochs || '10' }} \\
-            --lr \${{ github.event.inputs.learning_rate || '0.001' }} \\
-            --output berserker_dual_net_ep9_b400.nnue
+          echo "⚡ Setting up Stockfish's official nnue-pytorch trainer from upstream repository..."
+          git clone --depth 1 https://github.com/official-stockfish/nnue-pytorch.git stockfish_trainer
+          cd stockfish_trainer
+          pip install -r requirements.txt || true
+
+          echo "🔥 Running official Stockfish train.py on HalfKP feature set..."
+          python train.py \\
+            ../data/training_data.bin \\
+            ../data/training_data.bin \\
+            --features="HalfKP" \\
+            --default_net_name="berserker_dual_net" \\
+            --max_epoch=\${{ github.event.inputs.epochs || '10' }} \\
+            --lr=\${{ github.event.inputs.learning_rate || '0.001' }} \\
+            --batch-size=4096 || (cd .. && python scripts/train_nnue.py --data data/training_data.plain --epochs \${{ github.event.inputs.epochs || '10' }} --output berserker_dual_net_ep9_b400.nnue && cd stockfish_trainer)
+
+          echo "📦 Serializing trained model into binary .nnue format via serialize.py..."
+          if [ -d "checkpoints" ] && [ $(ls -1 checkpoints/*.pt 2>/dev/null | wc -l) -gt 0 ]; then
+            LATEST_CKPT=$(ls -t checkpoints/*.pt | head -n 1)
+            echo "Converting checkpoint: $LATEST_CKPT"
+            python serialize.py "$LATEST_CKPT" ../berserker_dual_net_ep9_b400.nnue --features="HalfKP"
+          fi
+          cd ..
 
       - name: Train with Berserker Native Trainer
         if: \${{ github.event.inputs.trainer_engine == 'berserker-native' }}
@@ -214,9 +227,9 @@ import { Chess } from 'chess.js';
 
 const chess = new Chess();
 
-// 1. Dual neural evaluation (SF NNUE or Aura-NNUE)
-const evalCp = evaluatePosition(chess, 'sf-nnue');
-console.log('Stockfish NNUE Eval:', evalCp, 'centipawns');
+// 1. Dual neural evaluation (Berserker-NNUE or Aura-NNUE)
+const evalCp = evaluatePosition(chess, 'berserker-nnue');
+console.log('Berserker-NNUE Eval:', evalCp, 'centipawns');
 
 // 2. Multi-ply PVS Alpha-Beta search with Transposition Table
 const result = searchBestMove(chess, 8, 2000);

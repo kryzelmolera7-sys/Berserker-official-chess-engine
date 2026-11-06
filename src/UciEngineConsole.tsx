@@ -35,11 +35,11 @@ export const UciEngineConsole: React.FC = () => {
 
   const [inputCmd, setInputCmd] = useState<string>('uci');
   const [copiedLogs, setCopiedLogs] = useState<boolean>(false);
-  const [activeEvalMode, setActiveEvalMode] = useState<'sf-nnue' | 'aura-nnue'>('sf-nnue');
+  const [activeEvalMode, setActiveEvalMode] = useState<'berserker-nnue' | 'aura-nnue'>('berserker-nnue');
   const [customFen, setCustomFen] = useState<string>('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
   const [localLogs, setLocalLogs] = useState<string[]>([
-    'Berserker 18 (v0.2.0-alpha) Standalone Engine Core Initialized.',
-    'Evaluation Engines: Stockfish HalfKP-Dual-1536 NNUE & Aura-NNUE (GeoSparse-MoE).',
+    'Berserker v0.2.0 Standalone Engine Core Initialized.',
+    'Evaluation Engines: Berserker HalfKP-Dual-1536 NNUE & Aura-NNUE (GeoSparse-MoE).',
     'Type UCI commands below or click quick-actions.',
     '--------------------------------------------------------------------------------'
   ]);
@@ -57,13 +57,13 @@ export const UciEngineConsole: React.FC = () => {
     setLocalLogs((prev) => [...prev, `> ${cmd}`]);
 
     if (cmd === 'eval') {
-      if (activeEvalMode === 'sf-nnue') {
-        const sfEval = evaluateBerserkerNnue(customFen);
+      if (activeEvalMode === 'berserker-nnue') {
+        const bszEval = evaluateBerserkerNnue(customFen);
         setLocalLogs((prev) => [
           ...prev,
-          `[SF-NNUE] Eval: ${sfEval.centipawns > 0 ? '+' : ''}${(sfEval.centipawns / 100).toFixed(2)} (${sfEval.centipawns} cp)`,
-          `[SF-NNUE] Net: ${sfEval.netId} | SCReLU Sum: ${sfEval.screluActivationSum}`,
-          `[SF-NNUE] WDL: Win ${(sfEval.winProb * 100).toFixed(1)}% | Draw ${(sfEval.drawProb * 100).toFixed(1)}% | Loss ${(sfEval.lossProb * 100).toFixed(1)}%`
+          `[Berserker-NNUE] Eval: ${bszEval.centipawns > 0 ? '+' : ''}${(bszEval.centipawns / 100).toFixed(2)} (${bszEval.centipawns} cp)`,
+          `[Berserker-NNUE] Net: ${bszEval.netId} | SCReLU Sum: ${bszEval.screluActivationSum}`,
+          `[Berserker-NNUE] WDL: Win ${(bszEval.winProb * 100).toFixed(1)}% | Draw ${(bszEval.drawProb * 100).toFixed(1)}% | Loss ${(bszEval.lossProb * 100).toFixed(1)}%`
         ]);
       } else {
         const auraEval = evaluateAuraNnue(customFen);
@@ -120,17 +120,17 @@ export const UciEngineConsole: React.FC = () => {
           <span className="text-[11px] text-slate-400 font-semibold px-2">Neural Net:</span>
           <button
             onClick={() => {
-              setActiveEvalMode('sf-nnue');
-              setLocalLogs((p) => [...p, '[UCI] Switched evaluator to Stockfish HalfKP-Dual-1536 NNUE']);
+              setActiveEvalMode('berserker-nnue');
+              setLocalLogs((p) => [...p, '[UCI] Switched evaluator to Berserker HalfKP-Dual-1536 NNUE']);
             }}
             className={`px-3 py-1 rounded-lg text-xs font-mono font-bold transition flex items-center gap-1.5 ${
-              activeEvalMode === 'sf-nnue'
+              activeEvalMode === 'berserker-nnue'
                 ? 'bg-purple-600 text-white shadow-md'
                 : 'text-slate-400 hover:text-white'
             }`}
           >
             <Cpu className="w-3.5 h-3.5" />
-            SF NNUE
+            Berserker-NNUE
           </button>
           <button
             onClick={() => {
@@ -240,7 +240,7 @@ export const UciEngineConsole: React.FC = () => {
             onClick={() => handleSend('eval')}
             className="px-2.5 py-1 rounded bg-purple-950 hover:bg-purple-900 text-purple-300 border border-purple-800 transition font-bold"
           >
-            eval ({activeEvalMode === 'sf-nnue' ? 'SF NNUE' : 'Aura-NNUE'})
+            eval ({activeEvalMode === 'berserker-nnue' ? 'Berserker-NNUE' : 'Aura-NNUE'})
           </button>
           <button
             onClick={() => handleSend('position startpos')}

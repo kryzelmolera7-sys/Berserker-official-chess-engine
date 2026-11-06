@@ -71,7 +71,7 @@ export default function App() {
               </span>
             </div>
             <p className="text-[11px] text-slate-400">
-              Standalone UCI Engine • Stockfish HalfKP-Dual NNUE & Aura-NNUE (GeoSparse-MoE)
+              Standalone UCI Engine • Berserker HalfKP-Dual NNUE & Aura-NNUE (GeoSparse-MoE)
             </p>
           </div>
         </div>
@@ -195,7 +195,7 @@ export default function App() {
 
       {/* Clean Footer */}
       <footer className="border-t border-slate-900 bg-slate-950/80 px-4 lg:px-8 py-3 text-center text-xs text-slate-500">
-        Berserker 18 (v0.2.0-alpha) Standalone Engine • +570 Elo vs Previous Baseline • Stockfish NNUE & Aura-NNUE (GeoSparse-MoE)
+        Berserker v0.2.0 Standalone Engine • +417 Elo vs Previous Baseline • Berserker-NNUE & Aura-NNUE (GeoSparse-MoE)
       </footer>
     </div>
   );

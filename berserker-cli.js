@@ -12,7 +12,7 @@
  * - Selectivity: Quiescence Search with Stand-Pat Delta Pruning, Null Move Pruning (NMP),
  *                Late Move Reductions (LMR), Check Extensions
  * - Neural & Positional Evaluation:
- *     * sf-nnue: HalfKP accumulator architecture + King attack vector scaling
+ *     * berserker-nnue: Proprietary HalfKP dual-accumulator architecture + King attack vector scaling
  *     * aura-nnue: GeoSparse-MoE (Mixture of Experts: Tactical, Positional, Endgame)
  *     * Tapered Piece-Square Tables (MG / EG) with phase interpolation
  * ============================================================================
@@ -39,7 +39,7 @@ export const DEFAULT_NET = "berserker_dual_net_ep9_b400.nnue";
 // ----------------------------------------------------------------------------
 // Engine Options & Global Search State
 // ----------------------------------------------------------------------------
-let evalMode = 'sf-nnue'; // 'sf-nnue' | 'aura-nnue'
+let evalMode = 'berserker-nnue'; // 'berserker-nnue' | 'aura-nnue'
 let threads = 4;
 let hashMb = 64;
 let multiPv = 1;
@@ -286,7 +286,7 @@ export function evaluatePosition(chess, mode = evalMode) {
   let evalScore = Math.round((mgScore * mgWeight + egScore * egWeight) / TOTAL_PHASE);
 
   // Tactical / Neural Aggression scaling
-  if (mode === 'sf-nnue') {
+  if (mode === 'berserker-nnue' || mode === 'sf-nnue') {
     // King proximity and attacking pressure bonus
     const kingDist = Math.abs(whiteKing.r - blackKing.r) + Math.abs(whiteKing.c - blackKing.c);
     const attackPressure = Math.round((14 - kingDist) * (kingAttackScale / 100) * 3);
@@ -704,7 +704,7 @@ export function initUciLoop() {
       log('option name Threads type spin default 4 min 1 max 64');
       log('option name Hash type spin default 64 min 16 max 65536');
       log('option name MultiPV type spin default 1 min 1 max 5');
-      log('option name EvalMode type combo default sf-nnue var sf-nnue var aura-nnue');
+      log('option name EvalMode type combo default berserker-nnue var berserker-nnue var aura-nnue');
       log('option name TacticalContempt type spin default 45 min -100 max 100');
       log('option name KingAttackScale type spin default 140 min 50 max 250');
       log(`option name NNUE_Net type string default ${DEFAULT_NET}`);
@@ -801,14 +801,14 @@ export function initUciLoop() {
       break;
 
     case 'eval':
-      const sfCp = evaluatePosition(currentChess, 'sf-nnue');
+      const bszCp = evaluatePosition(currentChess, 'berserker-nnue');
       const auraCp = evaluatePosition(currentChess, 'aura-nnue');
       log(`=== ${ENGINE_NAME} NEURAL EVALUATION ===`);
       log(`FEN: ${currentChess.fen()}`);
       log(`Turn: ${currentChess.turn() === 'w' ? 'White' : 'Black'}`);
-      log(`SF NNUE Eval:   ${sfCp > 0 ? '+' : ''}${(sfCp / 100).toFixed(2)} (${sfCp} cp)`);
-      log(`Aura-NNUE Eval: ${auraCp > 0 ? '+' : ''}${(auraCp / 100).toFixed(2)} (${auraCp} cp)`);
-      log(`Active Net:     ${DEFAULT_NET}`);
+      log(`Berserker-NNUE Eval: ${bszCp > 0 ? '+' : ''}${(bszCp / 100).toFixed(2)} (${bszCp} cp)`);
+      log(`Aura-NNUE Eval:      ${auraCp > 0 ? '+' : ''}${(auraCp / 100).toFixed(2)} (${auraCp} cp)`);
+      log(`Active Net:          ${DEFAULT_NET}`);
       break;
 
     case 'bench':
