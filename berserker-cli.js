@@ -31,8 +31,8 @@ import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { Chess } from 'chess.js';
 
-export const ENGINE_NAME = "Berserker v0.2.0";
-export const ENGINE_VERSION = "0.2.0";
+export const ENGINE_NAME = "Berserker v0.3.0";
+export const ENGINE_VERSION = "0.3.0";
 export const ENGINE_AUTHOR = "Berserker Engine Team";
 export const DEFAULT_NET = "berserker_brnnue_v030.nnue";
 
