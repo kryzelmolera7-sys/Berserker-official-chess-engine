@@ -1,6 +1,6 @@
-# Berserker v0.2.0 — Standalone UCI Chess Engine
+# Berserker v0.3.0 — Standalone UCI Chess Engine
 
-A high-performance, standalone UCI chess engine powered by **BRnnuev030 Dual NNUE** (combining **Berserker v0.9.0** and **PlentyChess**) and **Aura-NNUE (GeoSparse-MoE)** paired with an advanced **Principal Variation Search (PVS)** engine.
+A high-performance, standalone UCI chess engine powered by **BRnnuev030 Dual NNUE** (combining **Berserker v0.3.0** and **MoE**) and **Aura-NNUE (GeoSparse-MoE)** paired with an advanced **Principal Variation Search (PVS)** engine.
 
 ---
 
