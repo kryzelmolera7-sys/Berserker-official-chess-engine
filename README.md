@@ -6,21 +6,7 @@ A high-performance, standalone UCI chess engine powered by **BRnnuev030 Dual NNU
 
 ## 1. Dual NNUE Architecture: BRnnuev030
 
-**BRnnuev030** (`berserker_brnnue_v030.nnue`) is Berserker's next-generation dual-accumulator evaluation architecture that combines two specialized neural sub-networks:
-
-1. **Berserker v0.9.0 NNUE Sub-Network (Author: Jay Honnold):**
-   - **Architecture:** `HalfKP-1024` accumulator with Squared Clipped ReLU (SCReLU) activation.
-   - **Specialization:** Dynamic piece mobility, rapid king attacks, open-file rook penetrations, and sharp tactical initiative.
-
-2. **PlentyChess NNUE Sub-Network (Author: Ankan Banerjee):**
-   - **Architecture:** `HalfKAv2-1024` accumulator with spatial endgame weighting.
-   - **Specialization:** Endgame piece harmony, pawn chain structure stabilization, and technical conversion precision.
-
-3. **Dynamic Phase Gating:**
-   - Interpolates weights across 24 phase ticks ($T = 24$):
-     - **Middlegame / High Tactical Tension:** 64% Berserker v0.9.0 + 36% PlentyChess
-     - **Endgame / Low Material:** 32% Berserker v0.9.0 + 68% PlentyChess
-   - Eliminates tactical blindness in the opening while guaranteeing clinical endgame conversion.
+**BRnnuev030** (`berserker_brnnue_v030.nnue`) is Berserker's next-generation dual-accumulator evaluation architecture that combines two specialized neural sub-networks
 
 ---
 
