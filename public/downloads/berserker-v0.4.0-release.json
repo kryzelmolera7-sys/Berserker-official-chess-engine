@@ -6,6 +6,10 @@
   "status": "Official Stable Multi-Platform Release",
   "features": [
     "Hybrid MCTS-PVS Dual Arbiter (PUCT Policy Guidance + Tactical Safety Net)",
+    "2-Ply Leaf Quiescence Tactical Rollout (Q-Rollout) for Mid-Tactic Stabilization",
+    "Dynamic Entropy-Driven c_puct Scaling & First Play Urgency (FPU)",
+    "Subtree Reuse & Graph Transposition Grafting across Consecutive Turns",
+    "Continuous Bayesian Dual Arbiter with Tactical Volatility Weighting",
     "Tactical Horizon Alpha-Beta Guardian with Automatic Blunder Override",
     "Correction History (CorrHist) with 16,384 Pawn & Non-Pawn Buckets",
     "Singular Extensions (SE) & Double Singular Extensions (+2 plies)",
@@ -18,20 +22,6 @@
     "Multi-Platform: Windows (AVX2/Modern/ARM64), Linux (AVX2/Modern/ARM64), macOS (Apple Silicon/Intel), Android"
   ],
   "downloads": [
-    {
-      "fileName": "berserker_brnnue_v040_huge.nnue",
-      "sizeBytes": 71827456,
-      "sizeFormatted": "68.5 MB",
-      "sha256": "55ad72bf88dd11a4770580e44e9be50f550c9de6a44eae02db65817dcedd246d",
-      "downloadUrl": "/downloads/berserker_brnnue_v040_huge.nnue"
-    },
-    {
-      "fileName": "berserker_brnnue_v040_large.nnue",
-      "sizeBytes": 47500544,
-      "sizeFormatted": "45.3 MB",
-      "sha256": "dda3a4346b3fb44051413eb4cf60f6c1aa6c6668dc423eed3c0a0fa0e27406e1",
-      "downloadUrl": "/downloads/berserker_brnnue_v040_large.nnue"
-    },
     {
       "fileName": "berserker_brnnue_v040_speed.nnue",
       "sizeBytes": 13421772,
@@ -90,9 +80,9 @@
     },
     {
       "fileName": "berserker-v0.4.0-cli.js",
-      "sizeBytes": 44326,
-      "sizeFormatted": "43.3 KB",
-      "sha256": "87cab9b56fff2d18f04a087bbe23028be4b7d48e69fe333d5105d392b6829757",
+      "sizeBytes": 47086,
+      "sizeFormatted": "46.0 KB",
+      "sha256": "76c2f7d76fdb4cad63b33af5baebfc3a16bff56714c925bd588c9e0e5aafc53f",
       "downloadUrl": "/downloads/berserker-v0.4.0-cli.js"
     },
     {

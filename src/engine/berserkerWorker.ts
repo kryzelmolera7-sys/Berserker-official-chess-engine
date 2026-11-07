@@ -16,9 +16,9 @@
 
 import { Chess } from 'chess.js';
 import { evaluateBRnnueV030, evaluateBerserker10Nnue } from './brnnueDualEval';
-import { searchHybridNnueMcts } from './berserkerMctsHybrid';
+import { searchHybridNnueMcts, resetMctsTree } from './berserkerMctsHybrid';
 
-const ENGINE_NAME = "Berserker v0.4.0";
+const ENGINE_NAME = "Berserker v0.6.0";
 const ENGINE_AUTHOR = "Berserker Engine Team";
 const DEFAULT_NET = "berserker_brnnue_v040.nnue";
 
@@ -773,6 +773,7 @@ self.onmessage = function (event) {
     case 'ucinewgame':
       currentChess = new Chess();
       clearSearchState();
+      resetMctsTree();
       break;
 
     case 'position':
@@ -821,7 +822,7 @@ self.onmessage = function (event) {
 
         const topMovesStr = hybridRes.mctsTopMoves.map(m => `${m.uci}(${m.visits}v,${m.qValue}q)`).join(' ');
         self.postMessage(
-          `info depth ${hybridRes.pvsDepth} score cp ${hybridRes.scoreCp} visits ${hybridRes.mctsVisits} sims ${hybridRes.totalSimulations} arbiter ${hybridRes.decisionReason} delta ${hybridRes.safetyNetDeltaCp} time ${hybridRes.timeMs} top [${topMovesStr}] pv ${hybridRes.bestMoveUci}`
+          `info depth ${hybridRes.pvsDepth} score cp ${hybridRes.scoreCp} visits ${hybridRes.mctsVisits} sims ${hybridRes.totalSimulations} arbiter ${hybridRes.decisionReason} volatility ${hybridRes.tacticalVolatility} reused ${hybridRes.treeReused} delta ${hybridRes.safetyNetDeltaCp} time ${hybridRes.timeMs} top [${topMovesStr}] pv ${hybridRes.bestMoveUci}`
         );
         self.postMessage(`bestmove ${hybridRes.bestMoveUci}`);
       } else {

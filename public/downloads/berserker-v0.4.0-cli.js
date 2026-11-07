@@ -28,8 +28,8 @@ import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { Chess } from 'chess.js';
 
-export const ENGINE_NAME = "Berserker v0.4.0";
-export const ENGINE_VERSION = "0.4.0";
+export const ENGINE_NAME = "Berserker v0.6.0";
+export const ENGINE_VERSION = "0.6.0";
 export const ENGINE_AUTHOR = "Berserker Engine Team";
 export const DEFAULT_NET = "berserker_brnnue_v040.nnue";
 
@@ -760,6 +760,14 @@ function cpToValueCli(cp) {
   return Math.tanh(cp / 350);
 }
 
+function calculateDynamicCpuctCli(parentVisits, cBase = 1.85, cFactor = 0.45) {
+  return cBase + cFactor * Math.log(1 + Math.max(0, parentVisits) / 25.0);
+}
+
+function calculateFpuCli(parentQ, prior, fpuReduction = 0.25) {
+  return Math.max(-0.98, Math.min(0.98, parentQ - fpuReduction * Math.sqrt(Math.max(0.01, prior))));
+}
+
 function computeMovePriorsCli(chess, moves) {
   if (moves.length === 0) return [];
   const rawScores = new Array(moves.length);
@@ -768,22 +776,78 @@ function computeMovePriorsCli(chess, moves) {
     let score = 0;
     if (m.captured) {
       const see = staticExchangeEvaluation(chess, m);
-      score += see >= 0 ? 180 + see * 0.5 : -150;
+      score += see >= 0 ? 190 + see * 0.5 : -160;
     }
-    if (m.promotion) score += m.promotion === 'q' ? 300 : 80;
-    if (m.san && m.san.includes('+')) score += 70;
-    if (['e4', 'd4', 'e5', 'd5', 'c4', 'f4', 'c5', 'f5'].includes(m.to)) score += 25;
-    if (['n', 'b'].includes(m.piece)) score += 15;
-    if (m.san === 'O-O' || m.san === 'O-O-O') score += 65;
+    if (m.promotion) score += m.promotion === 'q' ? 320 : 90;
+    if (m.san && m.san.includes('+')) score += 75;
+    if (['e4', 'd4', 'e5', 'd5'].includes(m.to)) score += 35;
+    else if (['c4', 'f4', 'c5', 'f5'].includes(m.to)) score += 20;
+
+    if (['n', 'b'].includes(m.piece)) {
+      score += 18;
+      if (m.piece === 'n' && ['c3', 'f3', 'c6', 'f6', 'd5', 'e5', 'd4', 'e4'].includes(m.to)) score += 20;
+    }
+    if (m.piece === 'r') {
+      if (m.to.endsWith('7') || m.to.endsWith('2')) score += 30;
+      if (['d', 'e'].includes(m.to[0])) score += 15;
+    }
+    if (m.san === 'O-O' || m.san === 'O-O-O') score += 70;
     rawScores[i] = score;
   }
   const maxScore = Math.max(...rawScores);
-  const exps = rawScores.map(s => Math.exp((s - maxScore) / 60.0));
+  const exps = rawScores.map(s => Math.exp((s - maxScore) / 55.0));
   const sumExp = exps.reduce((a, b) => a + b, 0);
   return exps.map(e => e / Math.max(1e-9, sumExp));
 }
 
-function runMctsSearchCli(chess, maxSims = 800, maxTimeMs = 1500, cPuct = 2.25) {
+function runLeafTacticalRolloutCli(chess, maxPlies = 2) {
+  if (chess.isCheckmate()) return -1.0;
+  if (chess.isDraw()) return 0.0;
+  const sim = new Chess(chess.fen());
+  let ply = 0;
+  while (ply < maxPlies) {
+    if (sim.isCheckmate()) return ply % 2 === 0 ? -1.0 : 1.0;
+    if (sim.isDraw()) return 0.0;
+    const legal = sim.moves({ verbose: true });
+    if (legal.length === 0) break;
+    let bestCapture = null;
+    let bestSee = -1;
+    for (const m of legal) {
+      if (m.captured) {
+        const see = staticExchangeEvaluation(sim, m);
+        if (see > bestSee) {
+          bestSee = see;
+          bestCapture = m;
+        }
+      }
+    }
+    if (!bestCapture || bestSee < 0) break;
+    sim.move(bestCapture);
+    ply++;
+  }
+  const evalCp = evaluatePosition(sim, evalMode);
+  const perspectiveSign = sim.turn() === chess.turn() ? 1 : -1;
+  return cpToValueCli(evalCp * perspectiveSign);
+}
+
+function calculateTacticalVolatilityCli(chess) {
+  let volatility = 0;
+  if (chess.inCheck()) volatility += 80;
+  const moves = chess.moves({ verbose: true });
+  let captures = 0;
+  for (const m of moves) {
+    if (m.captured) {
+      captures++;
+      const see = staticExchangeEvaluation(chess, m);
+      if (see >= 0) volatility += 35;
+    }
+    if (m.san && m.san.includes('+')) volatility += 25;
+  }
+  volatility += Math.min(60, captures * 12);
+  return Math.min(1.0, volatility / 220.0);
+}
+
+function runMctsSearchCli(chess, maxSims = 800, maxTimeMs = 1500) {
   const startFen = chess.fen();
   const rootMoves = chess.moves({ verbose: true });
   if (rootMoves.length === 0) return null;
@@ -801,18 +865,20 @@ function runMctsSearchCli(chess, maxSims = 800, maxTimeMs = 1500, cPuct = 2.25) 
 
   const startTime = Date.now();
   let sims = 0;
+  let rootQ = 0;
 
   while (sims < maxSims) {
     if (sims % 32 === 0 && (Date.now() - startTime) >= maxTimeMs) break;
 
     const rootVisitsSqrt = Math.sqrt(Math.max(1, sims));
+    const currentCpuct = calculateDynamicCpuctCli(sims, 1.85, 0.45);
     let bestChildIdx = 0;
     let bestPuct = -Infinity;
 
     for (let i = 0; i < rootChildren.length; i++) {
       const c = rootChildren[i];
-      const qVal = c.visits === 0 ? 0 : c.totalValue / c.visits;
-      const uVal = cPuct * c.prior * (rootVisitsSqrt / (1 + c.visits));
+      const qVal = c.visits === 0 ? calculateFpuCli(rootQ, c.prior, 0.25) : c.totalValue / c.visits;
+      const uVal = currentCpuct * c.prior * (rootVisitsSqrt / (1 + c.visits));
       const puct = qVal + uVal;
       if (puct > bestPuct) {
         bestPuct = puct;
@@ -830,8 +896,7 @@ function runMctsSearchCli(chess, maxSims = 800, maxTimeMs = 1500, cPuct = 2.25) 
     } else if (simChess.isDraw()) {
       val = 0.0;
     } else {
-      const evalCp = evaluatePosition(simChess, evalMode);
-      val = cpToValueCli(evalCp);
+      val = runLeafTacticalRolloutCli(simChess, 2);
     }
 
     const rootVal = -val;
@@ -839,6 +904,7 @@ function runMctsSearchCli(chess, maxSims = 800, maxTimeMs = 1500, cPuct = 2.25) 
     chosen.totalValue += rootVal;
     chosen.qValue = chosen.totalValue / chosen.visits;
     sims++;
+    rootQ = (rootQ * (sims - 1) + rootVal) / sims;
   }
 
   rootChildren.sort((a, b) => b.visits - a.visits);
@@ -875,8 +941,10 @@ export function searchRoot(chess, targetDepth = 8, maxTimeMs = 3000) {
   let bestMoveUci = `${legalMoves[0].from}${legalMoves[0].to}${legalMoves[0].promotion || ''}`;
 
   if (searchMode === 'Hybrid-MCTS-PVS') {
-    // 1. Run MCTS Search with BRnnue PUCT Policy Guidance
-    const mctsResult = runMctsSearchCli(chess, 600, maxTimeMs * 0.65, 2.25);
+    const volatility = calculateTacticalVolatilityCli(chess);
+
+    // 1. Run MCTS Search with Dynamic PUCT, FPU & Tactical Q-Rollouts
+    const mctsResult = runMctsSearchCli(chess, 600, maxTimeMs * 0.65);
     const mctsUci = mctsResult?.bestChild?.uci || bestMoveUci;
 
     // 2. Run PVS Tactical Safety Net Search
@@ -895,7 +963,7 @@ export function searchRoot(chess, targetDepth = 8, maxTimeMs = 3000) {
       if ((Date.now() - startTime) >= remainingTime) break;
     }
 
-    // 3. Dual Arbiter: Tactical Safety Net override check
+    // 3. Continuous Bayesian Dual Arbiter
     let chosenUci = mctsUci;
     let reason = 'mcts-strategic';
     let deltaCp = 0;
@@ -918,8 +986,20 @@ export function searchRoot(chess, targetDepth = 8, maxTimeMs = 3000) {
             reason = 'safety-net-override';
             chosenUci = pvsBestUci;
           } else {
-            reason = 'mcts-strategic';
-            chosenUci = mctsUci;
+            const lambda = 0.15 + 0.55 * volatility;
+            const mctsVisits = mctsResult?.bestChild?.visits || 0;
+            const mctsRatio = mctsVisits / Math.max(1, mctsResult?.sims || 1);
+
+            if (mctsRatio > 0.55 && deltaCp < 60) {
+              reason = 'mcts-strategic';
+              chosenUci = mctsUci;
+            } else if (lambda > 0.50 && deltaCp > 80) {
+              reason = 'bayesian-blend';
+              chosenUci = pvsBestUci;
+            } else {
+              reason = 'mcts-strategic';
+              chosenUci = mctsUci;
+            }
           }
         }
       } catch (e) {
@@ -935,7 +1015,7 @@ export function searchRoot(chess, targetDepth = 8, maxTimeMs = 3000) {
     const mctsSims = mctsResult?.sims || 0;
 
     process.stdout.write(
-      `info depth ${pvsSearchDepth} score cp ${pvsBestScore} nodes ${totalNodes} nps ${nps} time ${elapsedMs} visits ${mctsVisits} sims ${mctsSims} arbiter ${reason} delta ${deltaCp} pv ${chosenUci}\n`
+      `info depth ${pvsSearchDepth} score cp ${pvsBestScore} nodes ${totalNodes} nps ${nps} time ${elapsedMs} visits ${mctsVisits} sims ${mctsSims} arbiter ${reason} volatility ${volatility.toFixed(2)} delta ${deltaCp} pv ${chosenUci}\n`
     );
 
     isSearching = false;

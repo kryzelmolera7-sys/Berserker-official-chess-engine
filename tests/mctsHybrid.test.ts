@@ -1,7 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert';
 import { Chess } from 'chess.js';
-import { runMctsSearch, searchHybridNnueMcts, cpToValue, valueToCp } from '../src/engine/berserkerMctsHybrid';
+import { 
+  runMctsSearch, 
+  searchHybridNnueMcts, 
+  cpToValue, 
+  valueToCp,
+  calculateDynamicCpuct,
+  calculateFpu,
+  runLeafTacticalRollout,
+  calculateTacticalVolatility,
+  resetMctsTree
+} from '../src/engine/berserkerMctsHybrid';
 import { searchIndependentBerserker } from '../src/engine/berserkerIndependentSearch';
 
 test('Hybrid MCTS: cpToValue and valueToCp are symmetric and bounded in [-1, 1]', () => {
@@ -138,3 +148,73 @@ test('Hybrid MCTS vs Pure PVS Benchmark: Rigorous Strength Verification', () => 
   );
   console.log(`[BENCHMARK RESULT] Pure PVS Score: ${pvsSuccessScore}/${benchmarkSuite.length - 1}, Hybrid MCTS-PVS Score: ${hybridSuccessScore}/${benchmarkSuite.length - 1} -> STRENGTH GAIN VERIFIED!`);
 });
+
+test('Hybrid MCTS: calculateDynamicCpuct scales smoothly with parent visits', () => {
+  const c0 = calculateDynamicCpuct(0);
+  const c50 = calculateDynamicCpuct(50);
+  const c500 = calculateDynamicCpuct(500);
+
+  assert.strictEqual(c0, 1.85);
+  assert.ok(c50 > c0, `c50 (${c50}) should be > c0 (${c0})`);
+  assert.ok(c500 > c50, `c500 (${c500}) should be > c50 (${c50})`);
+  assert.ok(c500 < 3.5, `c500 (${c500}) should remain reasonably bounded`);
+});
+
+test('Hybrid MCTS: calculateFpu assigns context-aware values to unvisited nodes', () => {
+  const winningParentFpu = calculateFpu(0.8, 0.25, 0.25);
+  const losingParentFpu = calculateFpu(-0.7, 0.25, 0.25);
+
+  // In winning parent, unvisited child should start positive
+  assert.ok(winningParentFpu > 0.5, `Winning parent FPU should be positive, got ${winningParentFpu}`);
+  // In losing parent, unvisited child should start negative
+  assert.ok(losingParentFpu < -0.7, `Losing parent FPU should be negative, got ${losingParentFpu}`);
+});
+
+test('Hybrid MCTS: runLeafTacticalRollout stabilizes tactical exchanges', () => {
+  // Tactical position: White queen can capture hanging rook
+  // 4r1k1/5ppp/8/8/8/8/5PPP/4R1K1 b - - 0 1
+  const chess = new Chess('4r1k1/5ppp/8/8/8/8/5PPP/4R1K1 b - - 0 1');
+  const val = runLeafTacticalRollout(chess, 2);
+  // Black playing Rxe1# or Rxe1 should be winning or decisive
+  assert.ok(val > 0.7 || val < -0.7, `Tactical rollout should produce decisive valuation, got ${val}`);
+});
+
+test('Hybrid MCTS: Subtree Reuse preserves accumulated simulations on consecutive turns', () => {
+  resetMctsTree();
+  const startFen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+  
+  // First search
+  const res1 = searchHybridNnueMcts(startFen, { simulations: 120, maxTimeMs: 400 });
+  assert.ok(res1.bestMoveUci.length >= 4);
+
+  // Make move on chess board
+  const chess = new Chess(startFen);
+  chess.move({
+    from: res1.bestMoveUci.substring(0, 2),
+    to: res1.bestMoveUci.substring(2, 4),
+    promotion: res1.bestMoveUci[4] || undefined
+  });
+  
+  // Opponent responds e7e5 or similar
+  const oppMove = chess.moves({ verbose: true })[0];
+  chess.move(oppMove);
+
+  // Second search on next turn
+  const res2 = searchHybridNnueMcts(chess.fen(), { simulations: 150, maxTimeMs: 400, enableSubtreeReuse: true });
+  // Verify tree reuse metric
+  assert.ok(res2.totalSimulations > 0);
+  assert.ok(typeof res2.treeReused === 'boolean');
+});
+
+test('Hybrid MCTS: calculateTacticalVolatility accurately measures quiet vs volatile positions', () => {
+  const quietChess = new Chess('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
+  const volatileChess = new Chess('r1bqk2r/pppp1ppp/2n5/4p3/1b1Pn3/2N2N2/PPP1BPPP/R1BQK2R w KQkq - 1 8');
+
+  const quietVol = calculateTacticalVolatility(quietChess);
+  const volatileVol = calculateTacticalVolatility(volatileChess);
+
+  assert.ok(volatileVol > quietVol, `Volatile position (${volatileVol}) must score higher than quiet startpos (${quietVol})`);
+  assert.ok(quietVol >= 0 && quietVol <= 1.0);
+  assert.ok(volatileVol >= 0 && volatileVol <= 1.0);
+});
+

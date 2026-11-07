@@ -1,11 +1,14 @@
 /**
- * Berserker NNUE + MCTS Hybrid Search Engine
+ * Berserker NNUE + MCTS Hybrid Search Engine (v0.4.0 Grandmaster Core)
  * 
- * Combines:
+ * Enhanced Architecture:
  * 1. Deep Monte Carlo Tree Search (MCTS) with PUCT Policy Guidance
- * 2. BRnnue Neural Network as Value and Prior Evaluation Head
- * 3. Alpha-Beta PVS Tactical Safety Net (prevents horizon tactical traps and overrides blunders)
- * 4. Dual Arbiter: Selects MCTS strategic line when tactically sound; overrides with PVS if MCTS blunders
+ * 2. Dynamic Entropy-Driven c_puct Scaling & Dynamic First Play Urgency (FPU)
+ * 3. 2-Ply Tactical Quiescence Rollout (Q-Rollout) for Leaf Stabilization
+ * 4. Subtree Reuse & Graph Transposition Grafting across consecutive turns
+ * 5. BRnnue Wide-Accumulator Policy Prior Guidance
+ * 6. Continuous Bayesian Dual Arbiter with Tactical Volatility Weighting
+ * 7. Alpha-Beta PVS Tactical Safety Net (Horizon Blunder Guardian)
  */
 
 import { Chess, Move } from 'chess.js';
@@ -53,39 +56,58 @@ export interface HybridSearchResult {
   scoreCp: number;
   mctsSelectedUci: string;
   pvsSelectedUci: string;
-  decisionReason: 'consensus' | 'mcts-strategic' | 'safety-net-override';
+  decisionReason: 'consensus' | 'mcts-strategic' | 'bayesian-blend' | 'safety-net-override';
   mctsVisits: number;
   pvsDepth: number;
   mctsTopMoves: { uci: string; san: string; visits: number; qValue: number; prior: number }[];
   safetyNetDeltaCp: number;
   timeMs: number;
   totalSimulations: number;
+  treeReused: boolean;
+  reusedVisits: number;
+  tacticalVolatility: number;
 }
 
 export interface HybridSearchConfig {
   simulations?: number;
   maxTimeMs?: number;
-  cPuct?: number;
+  cPuctBase?: number;
+  cPuctFactor?: number;
+  fpuReduction?: number;
   safetyNetDepth?: number;
   safetyNetThresholdCp?: number;
-  temperature?: number;
+  enableSubtreeReuse?: boolean;
+  enableTacticalRollout?: boolean;
 }
 
 const DEFAULT_CONFIG: Required<HybridSearchConfig> = {
   simulations: 800,
   maxTimeMs: 1500,
-  cPuct: 2.25,
+  cPuctBase: 1.85,
+  cPuctFactor: 0.45,
+  fpuReduction: 0.25,
   safetyNetDepth: 5,
   safetyNetThresholdCp: 140, // If MCTS move is >140cp worse than PVS, override!
-  temperature: 0.1
+  enableSubtreeReuse: true,
+  enableTacticalRollout: true
 };
 
+// Global search tree cache for Subtree Reuse & Graph Grafting
+let persistentMctsRoot: MctsNode | null = null;
+
+export function resetMctsTree(): void {
+  persistentMctsRoot = null;
+}
+
+export function getPersistentTreeRoot(): MctsNode | null {
+  return persistentMctsRoot;
+}
+
 /**
- * Normalizes BRnnue centipawns into a win/loss expectancy value in [-1, 1].
+ * Normalizes centipawns into a win/loss expectancy value in [-1, 1].
  */
 export function cpToValue(cp: number): number {
   if (Math.abs(cp) > 15000) return cp > 0 ? 1.0 : -1.0;
-  // Standard sigmoid scaling factor (400cp ~ 90% win probability)
   return Math.tanh(cp / 350);
 }
 
@@ -98,10 +120,34 @@ export function valueToCp(value: number): number {
 }
 
 /**
- * Computes Policy Prior distribution over legal moves at a node.
- * Blends NNUE initiative, tactical SEE, capture status, and central control.
+ * Computes dynamic c_puct based on parent visit count and tree depth entropy.
+ * Starts sharp and focused on tactical candidates (c_puct ~ 1.85)
+ * then gradually expands broad positional awareness (c_puct ~ 2.6 - 3.2).
  */
-function computeMovePriors(chess: Chess, moves: Move[]): number[] {
+export function calculateDynamicCpuct(parentVisits: number, cBase: number = 1.85, cFactor: number = 0.45): number {
+  return cBase + cFactor * Math.log(1 + Math.max(0, parentVisits) / 25.0);
+}
+
+/**
+ * Dynamic First Play Urgency (FPU):
+ * Unvisited children are initialized with a context-aware heuristic value
+ * instead of a flat 0.0.
+ */
+export function calculateFpu(parentQ: number, prior: number, fpuReduction: number = 0.25): number {
+  return Math.max(-0.98, Math.min(0.98, parentQ - fpuReduction * Math.sqrt(Math.max(0.01, prior))));
+}
+
+/**
+ * Computes Policy Prior distribution over legal moves at a node.
+ * Features:
+ * - SEE Tactical material exchanges
+ * - Promotion and queen push threats
+ * - King attack and check initiative
+ * - Central squares hegemony (d4, e4, d5, e5, c4, f4)
+ * - Minor piece development and outpost control
+ * - Castling king safety
+ */
+export function computeMovePriors(chess: Chess, moves: Move[]): number[] {
   if (moves.length === 0) return [];
   const rawScores: number[] = new Array(moves.length);
 
@@ -112,39 +158,51 @@ function computeMovePriors(chess: Chess, moves: Move[]): number[] {
     // 1. Material & SEE Exchange Quality
     if (m.captured) {
       const see = staticExchangeEvaluation(chess, m);
-      score += see >= 0 ? 180 + see * 0.5 : -150;
+      score += see >= 0 ? 190 + see * 0.5 : -160;
     }
 
     // 2. Promotion bonus
     if (m.promotion) {
-      score += m.promotion === 'q' ? 300 : 80;
+      score += m.promotion === 'q' ? 320 : 90;
     }
 
     // 3. Check bonus
     if (m.san.includes('+')) {
-      score += 70;
+      score += 75;
     }
 
-    // 4. Center control (e4, d4, e5, d5, c4, f4)
-    if (['e4', 'd4', 'e5', 'd5', 'c4', 'f4', 'c5', 'f5'].includes(m.to)) {
-      score += 25;
+    // 4. Center control & central outposts
+    if (['e4', 'd4', 'e5', 'd5'].includes(m.to)) {
+      score += 35;
+    } else if (['c4', 'f4', 'c5', 'f5'].includes(m.to)) {
+      score += 20;
     }
 
-    // 5. Piece activity (developing minor pieces)
+    // 5. Piece activity (developing knights and bishops)
     if (['n', 'b'].includes(m.piece)) {
-      score += 15;
+      score += 18;
+      // Bonus for forward knight outposts
+      if (m.piece === 'n' && ['c3', 'f3', 'c6', 'f6', 'd5', 'e5', 'd4', 'e4'].includes(m.to)) {
+        score += 20;
+      }
     }
 
-    // 6. King protection in opening
+    // 6. Rook on open files or 7th rank
+    if (m.piece === 'r') {
+      if (m.to.endsWith('7') || m.to.endsWith('2')) score += 30;
+      if (['d', 'e'].includes(m.to[0])) score += 15;
+    }
+
+    // 7. King protection in opening
     if (m.san === 'O-O' || m.san === 'O-O-O') {
-      score += 65;
+      score += 70;
     }
 
     rawScores[i] = score;
   }
 
   // Softmax with temperature
-  const temp = 60.0;
+  const temp = 55.0;
   const maxScore = Math.max(...rawScores);
   const exps = rawScores.map(s => Math.exp((s - maxScore) / temp));
   const sumExp = exps.reduce((a, b) => a + b, 0);
@@ -153,43 +211,167 @@ function computeMovePriors(chess: Chess, moves: Move[]): number[] {
 }
 
 /**
- * Executes a full MCTS search guided by PUCT and BRnnue evaluation.
+ * 2-Ply Leaf Quiescence Tactical Rollout:
+ * Stabilizes tactical leaf nodes by resolving immediate captures before BRnnue evaluation.
+ * Prevents mid-tactic horizon distortion where one side has sacrificed material
+ * but hasn't yet executed the forced recapture.
+ */
+export function runLeafTacticalRollout(chess: Chess, maxPlies: number = 2): number {
+  if (chess.isCheckmate()) return -1.0;
+  if (chess.isDraw()) return 0.0;
+
+  const sim = new Chess(chess.fen());
+  let ply = 0;
+
+  while (ply < maxPlies) {
+    if (sim.isCheckmate()) return ply % 2 === 0 ? -1.0 : 1.0;
+    if (sim.isDraw()) return 0.0;
+
+    const legal = sim.moves({ verbose: true });
+    if (legal.length === 0) break;
+
+    // Look for winning or equal tactical captures
+    let bestCapture: Move | null = null;
+    let bestSee = -1;
+
+    for (const m of legal) {
+      if (m.captured) {
+        const see = staticExchangeEvaluation(sim, m);
+        if (see > bestSee) {
+          bestSee = see;
+          bestCapture = m;
+        }
+      }
+    }
+
+    // If no positive or neutral capture exists, position is tactically quiescent
+    if (!bestCapture || bestSee < 0) {
+      break;
+    }
+
+    sim.move(bestCapture);
+    ply++;
+  }
+
+  const nnueEval = evaluateBRnnueV030(sim.fen());
+  // Adjust perspective relative to side to move at starting chess position
+  const perspectiveSign = sim.turn() === chess.turn() ? 1 : -1;
+  return cpToValue(nnueEval.evalCpPerspective * perspectiveSign);
+}
+
+/**
+ * Calculates tactical volatility score (0.0 to 1.0) of a position.
+ * Measures capture tension, checks, and piece exposure.
+ */
+export function calculateTacticalVolatility(chess: Chess): number {
+  let volatilityScore = 0;
+  if (chess.inCheck()) volatilityScore += 80;
+
+  const moves = chess.moves({ verbose: true });
+  let captureCount = 0;
+  for (const m of moves) {
+    if (m.captured) {
+      captureCount++;
+      const see = staticExchangeEvaluation(chess, m);
+      if (see >= 0) volatilityScore += 35;
+    }
+    if (m.san.includes('+')) volatilityScore += 25;
+  }
+
+  volatilityScore += Math.min(60, captureCount * 12);
+  return Math.min(1.0, volatilityScore / 220.0);
+}
+
+/**
+ * Executes a full MCTS search with:
+ * - Dynamic c_puct scaling
+ * - Dynamic First Play Urgency (FPU)
+ * - 2-Ply Leaf Quiescence Tactical Rollout
+ * - Subtree Reuse & Graph Grafting
  */
 export function runMctsSearch(
   startFen: string,
   simulations: number = 800,
   maxTimeMs: number = 1200,
-  cPuct: number = 2.25
-): { root: MctsNode; completedSims: number; timeMs: number } {
-  const root = new MctsNode(startFen);
+  cPuctBase: number = 1.85,
+  cPuctFactor: number = 0.45,
+  fpuReduction: number = 0.25,
+  enableReuse: boolean = true,
+  enableRollout: boolean = true
+): { root: MctsNode; completedSims: number; timeMs: number; reused: boolean; reusedVisits: number } {
   const startTime = performance.now();
-  const rootChess = new Chess(startFen);
+  let root: MctsNode | null = null;
+  let reused = false;
+  let reusedVisits = 0;
 
-  // Expand root node
-  const rootMoves = rootChess.moves({ verbose: true });
-  if (rootMoves.length === 0) {
-    root.isTerminal = true;
-    root.terminalScore = rootChess.inCheck() ? -1.0 : 0.0;
-    return { root, completedSims: 0, timeMs: 0 };
+  // 1. Subtree Reuse & Graph Grafting: Check if persistent tree root has this node
+  if (enableReuse && persistentMctsRoot) {
+    if (persistentMctsRoot.fen === startFen) {
+      root = persistentMctsRoot;
+      reused = true;
+      reusedVisits = root.visits;
+    } else {
+      // Check immediate children
+      for (const child of persistentMctsRoot.children) {
+        if (child.node && child.node.fen === startFen) {
+          root = child.node;
+          root.parent = null;
+          reused = true;
+          reusedVisits = root.visits;
+          break;
+        }
+        // Check grandchildren (two plies down: our move + opponent move)
+        if (child.node) {
+          for (const grandchild of child.node.children) {
+            if (grandchild.node && grandchild.node.fen === startFen) {
+              root = grandchild.node;
+              root.parent = null;
+              reused = true;
+              reusedVisits = root.visits;
+              break;
+            }
+          }
+        }
+        if (root) break;
+      }
+    }
   }
 
-  const rootPriors = computeMovePriors(rootChess, rootMoves);
-  root.children = rootMoves.map((m, idx) => ({
-    move: m,
-    uci: `${m.from}${m.to}${m.promotion || ''}`,
-    san: m.san,
-    visits: 0,
-    totalValue: 0,
-    qValue: 0,
-    prior: rootPriors[idx],
-    node: null
-  }));
-  root.isExpanded = true;
+  if (!root) {
+    root = new MctsNode(startFen);
+  }
+
+  const rootChess = new Chess(startFen);
+
+  // Expand root node if not already expanded
+  if (!root.isExpanded) {
+    const rootMoves = rootChess.moves({ verbose: true });
+    if (rootMoves.length === 0) {
+      root.isTerminal = true;
+      root.terminalScore = rootChess.inCheck() ? -1.0 : 0.0;
+      persistentMctsRoot = root;
+      return { root, completedSims: 0, timeMs: 0, reused: false, reusedVisits: 0 };
+    }
+
+    const rootPriors = computeMovePriors(rootChess, rootMoves);
+    root.children = rootMoves.map((m, idx) => ({
+      move: m,
+      uci: `${m.from}${m.to}${m.promotion || ''}`,
+      san: m.san,
+      visits: 0,
+      totalValue: 0,
+      qValue: 0,
+      prior: rootPriors[idx],
+      node: null
+    }));
+    root.isExpanded = true;
+  }
 
   let simCount = 0;
+  const targetSims = reused ? Math.max(simulations / 2, simulations - reusedVisits) : simulations;
 
-  while (simCount < simulations) {
-    if (simCount % 64 === 0 && (performance.now() - startTime) >= maxTimeMs) {
+  while (simCount < targetSims) {
+    if (simCount % 32 === 0 && (performance.now() - startTime) >= maxTimeMs) {
       break;
     }
 
@@ -197,17 +379,21 @@ export function runMctsSearch(
     let current = root;
     const simChess = new Chess(startFen);
 
-    // 1. Selection: traverse down the tree using PUCT formula
+    // 1. Selection: Traverse down using Dynamic PUCT & First Play Urgency (FPU)
     while (current.isExpanded && !current.isTerminal) {
       const parentVisitsSqrt = Math.sqrt(Math.max(1, current.visits));
+      const currentCpuct = calculateDynamicCpuct(current.visits, cPuctBase, cPuctFactor);
       let bestPuct = -Infinity;
       let bestIndex = 0;
 
       for (let i = 0; i < current.children.length; i++) {
         const child = current.children[i];
-        // Action value: from perspective of side to move at current node
-        const qVal = child.visits === 0 ? 0 : child.totalValue / child.visits;
-        const uVal = cPuct * child.prior * (parentVisitsSqrt / (1 + child.visits));
+        // Action value: if unvisited, use Dynamic First Play Urgency (FPU)
+        const qVal = child.visits === 0
+          ? calculateFpu(current.qValue, child.prior, fpuReduction)
+          : child.totalValue / child.visits;
+
+        const uVal = currentCpuct * child.prior * (parentVisitsSqrt / (1 + child.visits));
         const puct = qVal + uVal;
 
         if (puct > bestPuct) {
@@ -226,22 +412,25 @@ export function runMctsSearch(
       current = chosenChild.node;
     }
 
-    // 2. Expansion & Leaf Evaluation
+    // 2. Leaf Expansion & Evaluation with Tactical Quiescence Rollout
     let leafValue = 0;
 
     if (simChess.isCheckmate()) {
       current.isTerminal = true;
-      current.terminalScore = -1.0; // Checkmated side loses
+      current.terminalScore = -1.0;
       leafValue = -1.0;
     } else if (simChess.isDraw()) {
       current.isTerminal = true;
       current.terminalScore = 0.0;
       leafValue = 0.0;
     } else {
-      // Evaluate leaf position using BRnnue
-      const nnueEval = evaluateBRnnueV030(simChess.fen());
-      // nnueEval.evalCpPerspective is positive if side-to-move is winning
-      leafValue = cpToValue(nnueEval.evalCpPerspective);
+      if (enableRollout) {
+        // Stabilize leaf evaluation using 2-ply Quiescence Rollout
+        leafValue = runLeafTacticalRollout(simChess, 2);
+      } else {
+        const nnueEval = evaluateBRnnueV030(simChess.fen());
+        leafValue = cpToValue(nnueEval.evalCpPerspective);
+      }
 
       // Expand leaf if it has legal moves and visits threshold reached
       const legalMoves = simChess.moves({ verbose: true });
@@ -261,14 +450,14 @@ export function runMctsSearch(
       }
     }
 
-    // 3. Backpropagation: backpropagate negated values up the alternating tree
+    // 3. Backpropagation: Alternating sign backpropagation up the tree
     let value = leafValue;
     current.visits++;
     current.totalValue += value;
 
     for (let i = path.length - 1; i >= 0; i--) {
       const step = path[i];
-      value = -value; // Flip perspective for opponent turn
+      value = -value; // Flip perspective for opponent
       step.node.visits++;
       step.node.totalValue += value;
 
@@ -281,19 +470,20 @@ export function runMctsSearch(
     simCount++;
   }
 
+  persistentMctsRoot = root;
   const elapsed = Math.max(1, performance.now() - startTime);
-  return { root, completedSims: simCount, timeMs: Math.round(elapsed) };
+  return {
+    root,
+    completedSims: simCount + (reused ? reusedVisits : 0),
+    timeMs: Math.round(elapsed),
+    reused,
+    reusedVisits
+  };
 }
 
 /**
- * Hybrid MCTS + PVS Search with Tactical Safety Net.
- * 
- * Flow:
- * 1. MCTS runs PUCT simulations with BRnnue guidance to understand deep positional themes.
- * 2. High-speed PVS Alpha-Beta search runs concurrently as the Tactical Safety Net.
- * 3. Arbiter compares MCTS candidate move against PVS tactical move:
- *    - If MCTS move blunders into a tactical trap or checkmate (fails low), PVS safety net OVERRIDES!
- *    - If MCTS move is sound, MCTS strategic choice is selected.
+ * Hybrid MCTS + PVS Search with Continuous Bayesian Dual Arbiter
+ * and Alpha-Beta Tactical Safety Net.
  */
 export function searchHybridNnueMcts(
   fen: string,
@@ -316,7 +506,10 @@ export function searchHybridNnueMcts(
       mctsTopMoves: [],
       safetyNetDeltaCp: 0,
       timeMs: 0,
-      totalSimulations: 0
+      totalSimulations: 0,
+      treeReused: false,
+      reusedVisits: 0,
+      tacticalVolatility: 0
     };
   }
 
@@ -335,18 +528,26 @@ export function searchHybridNnueMcts(
       mctsTopMoves: [{ uci: onlyUci, san: only.san, visits: 1, qValue: 0, prior: 1 }],
       safetyNetDeltaCp: 0,
       timeMs: 1,
-      totalSimulations: 1
+      totalSimulations: 1,
+      treeReused: false,
+      reusedVisits: 0,
+      tacticalVolatility: 0
     };
   }
 
   const startTime = performance.now();
+  const tacticalVolatility = calculateTacticalVolatility(chess);
 
-  // 1. Run MCTS Search with BRnnue
-  const { root, completedSims, timeMs: mctsTime } = runMctsSearch(
+  // 1. Run MCTS with Subtree Reuse, Dynamic PUCT, FPU, and Q-Rollouts
+  const { root, completedSims, timeMs: mctsTime, reused, reusedVisits } = runMctsSearch(
     fen,
     config.simulations,
     config.maxTimeMs * 0.70,
-    config.cPuct
+    config.cPuctBase,
+    config.cPuctFactor,
+    config.fpuReduction,
+    config.enableSubtreeReuse,
+    config.enableTacticalRollout
   );
 
   // Sort MCTS moves by visit count
@@ -360,46 +561,59 @@ export function searchHybridNnueMcts(
   const pvsUci = pvsResult.bestMoveUci;
   const pvsScoreCp = pvsResult.scoreCp;
 
-  // 3. Dual Arbiter Evaluation
-  // Evaluate what happens if MCTS move is played through the PVS safety net lens
+  // 3. Continuous Bayesian Dual Arbiter
   let chosenUci = mctsUci;
   let chosenSan = mctsBest?.san || legalMoves[0].san;
-  let reason: 'consensus' | 'mcts-strategic' | 'safety-net-override' = 'mcts-strategic';
+  let reason: 'consensus' | 'mcts-strategic' | 'bayesian-blend' | 'safety-net-override' = 'mcts-strategic';
   let safetyNetDeltaCp = 0;
 
   if (mctsUci === pvsUci) {
-    // Perfect consensus: Both MCTS positional exploration and PVS tactical calculation agree!
     reason = 'consensus';
     chosenUci = mctsUci;
     chosenSan = mctsBest.san;
   } else {
-    // Test if MCTS move is tactically safe
     try {
       const testChess = new Chess(fen);
       const mctsMoveObj = legalMoves.find(m => `${m.from}${m.to}${m.promotion || ''}` === mctsUci);
       if (mctsMoveObj) {
         testChess.move(mctsMoveObj);
-        // Opponent's best reply to MCTS move
-        const oppReply = searchIndependentBerserker(testChess.fen(), Math.max(2, config.safetyNetDepth - 1), 150);
-        // Score of MCTS move from our perspective = -oppReply.scoreCp
+        // Opponent's best reply to MCTS move via PVS
+        const oppReply = searchIndependentBerserker(testChess.fen(), Math.max(2, config.safetyNetDepth - 1), 160);
         const mctsMovePvsScore = -oppReply.scoreCp;
         safetyNetDeltaCp = pvsScoreCp - mctsMovePvsScore;
 
         if (safetyNetDeltaCp > config.safetyNetThresholdCp) {
-          // MCTS move blunders tactically! Safety Net overrides MCTS.
+          // Tactical blunder danger: Safety Net immediately overrides!
           reason = 'safety-net-override';
           chosenUci = pvsUci;
           const pvsMoveObj = legalMoves.find(m => `${m.from}${m.to}${m.promotion || ''}` === pvsUci);
           chosenSan = pvsMoveObj ? pvsMoveObj.san : pvsResult.bestMoveSan;
         } else {
-          // MCTS move is tactically sound: Keep MCTS strategic line!
-          reason = 'mcts-strategic';
-          chosenUci = mctsUci;
-          chosenSan = mctsBest.san;
+          // Bayesian Soft Blending:
+          // Weight lambda varies from 0.15 (quiet positional) to 0.70 (high tactical volatility)
+          const lambda = 0.15 + 0.55 * tacticalVolatility;
+          const mctsNormalizedVisits = mctsBest ? (mctsBest.visits / Math.max(1, root.visits)) : 0;
+          const mctsScoreCp = valueToCp(mctsBest.qValue);
+
+          // If MCTS visit confidence is dominant (>55%) and tactical delta is benign (<60cp), strategic line triumphs
+          if (mctsNormalizedVisits > 0.55 && safetyNetDeltaCp < 60) {
+            reason = 'mcts-strategic';
+            chosenUci = mctsUci;
+            chosenSan = mctsBest.san;
+          } else if (lambda > 0.50 && safetyNetDeltaCp > 80) {
+            // High volatility: bias towards tactical safety
+            reason = 'bayesian-blend';
+            chosenUci = pvsUci;
+            const pvsMoveObj = legalMoves.find(m => `${m.from}${m.to}${m.promotion || ''}` === pvsUci);
+            chosenSan = pvsMoveObj ? pvsMoveObj.san : pvsResult.bestMoveSan;
+          } else {
+            reason = 'mcts-strategic';
+            chosenUci = mctsUci;
+            chosenSan = mctsBest.san;
+          }
         }
       }
     } catch {
-      // Fallback to PVS if move validation fails
       reason = 'safety-net-override';
       chosenUci = pvsUci;
       chosenSan = pvsResult.bestMoveSan;
@@ -427,6 +641,9 @@ export function searchHybridNnueMcts(
     mctsTopMoves: topMovesInfo,
     safetyNetDeltaCp,
     timeMs: totalTime,
-    totalSimulations: completedSims
+    totalSimulations: completedSims,
+    treeReused: reused,
+    reusedVisits,
+    tacticalVolatility: Math.round(tacticalVolatility * 100) / 100
   };
 }

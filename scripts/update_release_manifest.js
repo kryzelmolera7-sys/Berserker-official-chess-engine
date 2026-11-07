@@ -36,6 +36,10 @@ const manifest = {
   status: "Official Stable Multi-Platform Release",
   features: [
     "Hybrid MCTS-PVS Dual Arbiter (PUCT Policy Guidance + Tactical Safety Net)",
+    "2-Ply Leaf Quiescence Tactical Rollout (Q-Rollout) for Mid-Tactic Stabilization",
+    "Dynamic Entropy-Driven c_puct Scaling & First Play Urgency (FPU)",
+    "Subtree Reuse & Graph Transposition Grafting across Consecutive Turns",
+    "Continuous Bayesian Dual Arbiter with Tactical Volatility Weighting",
     "Tactical Horizon Alpha-Beta Guardian with Automatic Blunder Override",
     "Correction History (CorrHist) with 16,384 Pawn & Non-Pawn Buckets",
     "Singular Extensions (SE) & Double Singular Extensions (+2 plies)",
