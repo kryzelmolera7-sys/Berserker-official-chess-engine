@@ -3,53 +3,61 @@
   "version": "0.4.0",
   "author": "Berserker Engine Team",
   "date": "2026-11-06",
-  "status": "Official Stable Release",
+  "status": "Official Stable Multi-Platform Release",
   "features": [
     "Singular Extensions (SE)",
     "Multi-Ply Continuation History (Conthist, 768x768)",
     "Static Exchange Evaluation (SEE) Pruning",
     "ProbCut (Probability Cutoff)",
     "Multi-Cut Subtree Pruning",
+    "Expanded HalfKAv2-1536x2 & 2048x2 Neural Net Architecture (45.3 MB - 68.5 MB)",
     "16-Zone Spatial King Bucketing",
     "Dynamic MoE Neural Attention Router",
     "WDL-Curved Sigmoid Evaluation Rescaling",
-    "Best-Move Stability Time Allocation"
+    "Multi-Platform: Windows (AVX2/Modern/ARM64), Linux (AVX2/Modern/ARM64), macOS (Apple Silicon/Intel), Android"
   ],
   "downloads": [
     {
-      "fileName": "berserker-v0.4.0-cli.js",
-      "sizeBytes": 31321,
-      "sizeFormatted": "30.6 KB",
-      "sha256": "56b266d2da15591f881201181d97c302f9ad07363225f5388e490db33513e664",
-      "downloadUrl": "/downloads/berserker-v0.4.0-cli.js"
+      "fileName": "berserker_brnnue_v040_huge.nnue",
+      "sizeBytes": 71827456,
+      "sizeFormatted": "68.5 MB",
+      "sha256": "55ad72bf88dd11a4770580e44e9be50f550c9de6a44eae02db65817dcedd246d",
+      "downloadUrl": "/downloads/berserker_brnnue_v040_huge.nnue"
     },
     {
-      "fileName": "berserker-v0.4.0.cpp",
-      "sizeBytes": 5184,
-      "sizeFormatted": "5.1 KB",
-      "sha256": "cd6ebc7160d0ebf738a73d7e07d44ca9fd5104fe054d300c4b05bc016af75ded",
-      "downloadUrl": "/downloads/berserker-v0.4.0.cpp"
+      "fileName": "berserker_brnnue_v040_large.nnue",
+      "sizeBytes": 47500544,
+      "sizeFormatted": "45.3 MB",
+      "sha256": "dda3a4346b3fb44051413eb4cf60f6c1aa6c6668dc423eed3c0a0fa0e27406e1",
+      "downloadUrl": "/downloads/berserker_brnnue_v040_large.nnue"
+    },
+    {
+      "fileName": "berserker_brnnue_v040_speed.nnue",
+      "sizeBytes": 13421772,
+      "sizeFormatted": "12.8 MB",
+      "sha256": "db1a98778c5f43839ff2bb19962922f623e2cd2433d318ea18dc9a5ae870a19a",
+      "downloadUrl": "/downloads/berserker_brnnue_v040_speed.nnue"
     },
     {
       "fileName": "berserker_brnnue_v040.nnue",
-      "sizeBytes": 4194304,
-      "sizeFormatted": "4.0 MB",
-      "sha256": "3e58b284e453252d0c6b304f2565445ca96e49fc70083883d66fcb2edd580e40",
+      "sizeBytes": 47500544,
+      "sizeFormatted": "45.3 MB",
+      "sha256": "dda3a4346b3fb44051413eb4cf60f6c1aa6c6668dc423eed3c0a0fa0e27406e1",
       "downloadUrl": "/downloads/berserker_brnnue_v040.nnue"
     },
     {
-      "fileName": "berserker-v0.4.0-windows.bat",
-      "sizeBytes": 839,
-      "sizeFormatted": "0.8 KB",
-      "sha256": "d8deb4d2f28e4860ea8924fd2f7ff0b0615a776c6dea6f0fdb5522c4c75041db",
-      "downloadUrl": "/downloads/berserker-v0.4.0-windows.bat"
+      "fileName": "berserker-arena.eng",
+      "sizeBytes": 318,
+      "sizeFormatted": "0.3 KB",
+      "sha256": "318772b90d3462fbf1b5b9c0adbc08b1204d70737f2f68835bee79eb0906c9e7",
+      "downloadUrl": "/downloads/berserker-arena.eng"
     },
     {
-      "fileName": "berserker-v0.4.0-linux.sh",
-      "sizeBytes": 700,
-      "sizeFormatted": "0.7 KB",
-      "sha256": "d0090913844f6c17c2f56703e0c19fb5a05d72e4b45f2172f7d2610ea806d1c7",
-      "downloadUrl": "/downloads/berserker-v0.4.0-linux.sh"
+      "fileName": "berserker-banksia.json",
+      "sizeBytes": 773,
+      "sizeFormatted": "0.8 KB",
+      "sha256": "6732cfcec3100b7a8bb41a2bc3cb1f9c3faf1c5cca518f442add57d023484181",
+      "downloadUrl": "/downloads/berserker-banksia.json"
     },
     {
       "fileName": "berserker-cutechess.json",
@@ -59,11 +67,151 @@
       "downloadUrl": "/downloads/berserker-cutechess.json"
     },
     {
-      "fileName": "berserker-arena.eng",
-      "sizeBytes": 318,
-      "sizeFormatted": "0.3 KB",
-      "sha256": "318772b90d3462fbf1b5b9c0adbc08b1204d70737f2f68835bee79eb0906c9e7",
-      "downloadUrl": "/downloads/berserker-arena.eng"
+      "fileName": "berserker-droidfish.uci",
+      "sizeBytes": 647,
+      "sizeFormatted": "0.6 KB",
+      "sha256": "26e6305c1e7a47b1242ad3202b79bc5192a07e1255b72f1374a918de0f9b054f",
+      "downloadUrl": "/downloads/berserker-droidfish.uci"
+    },
+    {
+      "fileName": "berserker-fritz-chessbase.ini",
+      "sizeBytes": 621,
+      "sizeFormatted": "0.6 KB",
+      "sha256": "4ad5583d281f6e0f10a1f98a373b8ba086e8cb1757eed5c62ca006907cff62f5",
+      "downloadUrl": "/downloads/berserker-fritz-chessbase.ini"
+    },
+    {
+      "fileName": "berserker-termux-install.sh",
+      "sizeBytes": 1006,
+      "sizeFormatted": "1.0 KB",
+      "sha256": "4cda75e5996735cb0eff9cddc5f3e0fa4d56b7dec261b7d2005e7afc471792c7",
+      "downloadUrl": "/downloads/berserker-termux-install.sh"
+    },
+    {
+      "fileName": "berserker-v0.4.0-cli.js",
+      "sizeBytes": 38729,
+      "sizeFormatted": "37.8 KB",
+      "sha256": "5a1e062295c5f20785b4203a9dfb46be45916ab007d004b4896610e1accc0db1",
+      "downloadUrl": "/downloads/berserker-v0.4.0-cli.js"
+    },
+    {
+      "fileName": "berserker-v0.4.0-linux-arm64.sh",
+      "sizeBytes": 880,
+      "sizeFormatted": "0.9 KB",
+      "sha256": "eb6894a0b5a371494f5a07fc12a3608cab93a791e0b13aa80398f6ddb11a1938",
+      "downloadUrl": "/downloads/berserker-v0.4.0-linux-arm64.sh"
+    },
+    {
+      "fileName": "berserker-v0.4.0-linux-x64-avx2.sh",
+      "sizeBytes": 857,
+      "sizeFormatted": "0.8 KB",
+      "sha256": "d40611d69b833fafeb39c09ae26296a16b875383e0de4d072d0a37bd3a55b04a",
+      "downloadUrl": "/downloads/berserker-v0.4.0-linux-x64-avx2.sh"
+    },
+    {
+      "fileName": "berserker-v0.4.0-linux-x64-modern.sh",
+      "sizeBytes": 868,
+      "sizeFormatted": "0.8 KB",
+      "sha256": "87f1ffe23ac4be019a7b13685eda943fbcb57ad4addde2b5bd72a906fc3f883b",
+      "downloadUrl": "/downloads/berserker-v0.4.0-linux-x64-modern.sh"
+    },
+    {
+      "fileName": "berserker-v0.4.0-linux.sh",
+      "sizeBytes": 700,
+      "sizeFormatted": "0.7 KB",
+      "sha256": "d0090913844f6c17c2f56703e0c19fb5a05d72e4b45f2172f7d2610ea806d1c7",
+      "downloadUrl": "/downloads/berserker-v0.4.0-linux.sh"
+    },
+    {
+      "fileName": "berserker-v0.4.0-macos-apple-silicon.command",
+      "sizeBytes": 1045,
+      "sizeFormatted": "1.0 KB",
+      "sha256": "e2aa52f011df50b09c993fb80c46c9e9f17dc6cb3c5a449a81785cb0432750ee",
+      "downloadUrl": "/downloads/berserker-v0.4.0-macos-apple-silicon.command"
+    },
+    {
+      "fileName": "berserker-v0.4.0-macos-intel-x64.command",
+      "sizeBytes": 1023,
+      "sizeFormatted": "1.0 KB",
+      "sha256": "8e3b54c7fe8387af746a5a8224506bd5715bf47dc95454615ad799c3f44b6751",
+      "downloadUrl": "/downloads/berserker-v0.4.0-macos-intel-x64.command"
+    },
+    {
+      "fileName": "berserker-v0.4.0-windows-arm64.bat",
+      "sizeBytes": 809,
+      "sizeFormatted": "0.8 KB",
+      "sha256": "070b8b3977a724d2949eb228245bb097bd664ef2fa3bb67a23803a948ff299b8",
+      "downloadUrl": "/downloads/berserker-v0.4.0-windows-arm64.bat"
+    },
+    {
+      "fileName": "berserker-v0.4.0-windows-setup.ps1",
+      "sizeBytes": 2974,
+      "sizeFormatted": "2.9 KB",
+      "sha256": "9e83949b65e4b4747662a9362db71fa575aea5f9fd948a1a52beb6051be9c646",
+      "downloadUrl": "/downloads/berserker-v0.4.0-windows-setup.ps1"
+    },
+    {
+      "fileName": "berserker-v0.4.0-windows-x64-avx2.bat",
+      "sizeBytes": 801,
+      "sizeFormatted": "0.8 KB",
+      "sha256": "cf83661b55562ef6852171ddfcf8988209bbc25739683a18da4ae356b29b1ac5",
+      "downloadUrl": "/downloads/berserker-v0.4.0-windows-x64-avx2.bat"
+    },
+    {
+      "fileName": "berserker-v0.4.0-windows-x64-modern.bat",
+      "sizeBytes": 830,
+      "sizeFormatted": "0.8 KB",
+      "sha256": "0cddfb71e6a16350919b3c73f382de07d0a89f815d0780d8804cb0ee2d390942",
+      "downloadUrl": "/downloads/berserker-v0.4.0-windows-x64-modern.bat"
+    },
+    {
+      "fileName": "berserker-v0.4.0-windows.bat",
+      "sizeBytes": 839,
+      "sizeFormatted": "0.8 KB",
+      "sha256": "d8deb4d2f28e4860ea8924fd2f7ff0b0615a776c6dea6f0fdb5522c4c75041db",
+      "downloadUrl": "/downloads/berserker-v0.4.0-windows.bat"
+    },
+    {
+      "fileName": "berserker-v0.4.0.cpp",
+      "sizeBytes": 5805,
+      "sizeFormatted": "5.7 KB",
+      "sha256": "b621fa5ee847cd87da416b0f1b3bc7c694f50effb35716ed6b33e20e6b5d8a10",
+      "downloadUrl": "/downloads/berserker-v0.4.0.cpp"
+    },
+    {
+      "fileName": "build-windows.bat",
+      "sizeBytes": 957,
+      "sizeFormatted": "0.9 KB",
+      "sha256": "5961abf20ffa9ad67bb444da10050ba90ae608418bdad1b2b6649ecc5a344266",
+      "downloadUrl": "/downloads/build-windows.bat"
+    },
+    {
+      "fileName": "build.sh",
+      "sizeBytes": 1434,
+      "sizeFormatted": "1.4 KB",
+      "sha256": "0a8dc0325fcd0470576c5e459c240c3e0e8e524144f12029d48e328817dce7bf",
+      "downloadUrl": "/downloads/build.sh"
+    },
+    {
+      "fileName": "CMakeLists.txt",
+      "sizeBytes": 716,
+      "sizeFormatted": "0.7 KB",
+      "sha256": "b2f22b5d2275cf83534f26b9e40372d0268c65fbbe7d009e1127c363aa726260",
+      "downloadUrl": "/downloads/CMakeLists.txt"
+    },
+    {
+      "fileName": "install-linux.sh",
+      "sizeBytes": 1156,
+      "sizeFormatted": "1.1 KB",
+      "sha256": "7f6cebf6eba01d2256d1b5af42646a7d19bfae122ca7cdb12dc0326945dae78d",
+      "downloadUrl": "/downloads/install-linux.sh"
+    },
+    {
+      "fileName": "Makefile",
+      "sizeBytes": 1072,
+      "sizeFormatted": "1.0 KB",
+      "sha256": "917fe6ed8d63d05356471136531dd861b45295cf329fab79086c71c995d613ba",
+      "downloadUrl": "/downloads/Makefile"
     }
   ]
 }

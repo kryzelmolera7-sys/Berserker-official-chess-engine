@@ -1,0 +1,24 @@
+# ==============================================================================
+# Berserker v0.4.0 - DroidFish / Chess for Android UCI Configuration
+# Copy this file and berserker-v0.4.0-cli.js to /sdcard/DroidFish/uci/
+# ==============================================================================
+
+[Engine]
+Name=Berserker v0.4.0 (BRnnue)
+Author=Berserker Engine Team
+Version=0.4.0
+Command=node berserker-v0.4.0-cli.js
+Protocol=UCI
+
+[Options]
+Threads=4
+Hash=256
+EvalFile=berserker_brnnue_v040.nnue
+MoveOverhead=50
+SyzygyProbeDepth=1
+AuraMoE=true
+ContinuationHistory=true
+SingularExtensions=true
+ProbCut=true
+MultiCut=true
+KingBucketing16=true

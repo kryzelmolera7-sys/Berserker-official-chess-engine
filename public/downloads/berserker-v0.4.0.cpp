@@ -69,6 +69,8 @@ int killer_moves[64][2];
 int history_table[2][64][64];
 int conthist_table[768][768];
 int capture_history[2][64][64];
+int16_t pawn_corr_hist[2][16384];
+int16_t non_pawn_corr_hist[2][16384];
 
 // Fast 16-Zone King Spatial Bucketing
 inline int get_king_bucket(int sq) {
@@ -114,6 +116,11 @@ int main() {
             std::cout << "id author " << ENGINE_AUTHOR << "\n";
             std::cout << "option name Threads type spin default 4 min 1 max 64\n";
             std::cout << "option name Hash type spin default 64 min 16 max 65536\n";
+            std::cout << "option name CorrectionHistory type check default true\n";
+            std::cout << "option name DoubleSingularExtensions type check default true\n";
+            std::cout << "option name ProbCut type check default true\n";
+            std::cout << "option name MultiCut type check default true\n";
+            std::cout << "option name FiftyMoveDecay type check default true\n";
             std::cout << "option name EvalMode type combo default brnnue-v040 var brnnue-v040\n";
             std::cout << "option name NNUE_Net type string default " << DEFAULT_NET << "\n";
             std::cout << "uciok\n" << std::flush;
@@ -124,6 +131,8 @@ int main() {
             std::memset(history_table, 0, sizeof(history_table));
             std::memset(conthist_table, 0, sizeof(conthist_table));
             std::memset(capture_history, 0, sizeof(capture_history));
+            std::memset(pawn_corr_hist, 0, sizeof(pawn_corr_hist));
+            std::memset(non_pawn_corr_hist, 0, sizeof(non_pawn_corr_hist));
             std::fill(transposition_table.begin(), transposition_table.end(), TTEntry{});
         } else if (command == "position") {
             // Setup position

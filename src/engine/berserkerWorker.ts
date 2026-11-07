@@ -68,6 +68,10 @@ const conthistTable = new Int32Array(768 * 768);
 // Capture History: 2 colors * 64 from * 64 to
 const captureHistoryTable = new Int32Array(2 * 64 * 64);
 
+// Correction History (CorrHist): Tracks systematic NNUE evaluation errors
+const pawnCorrHist: Int16Array[] = [new Int16Array(16384), new Int16Array(16384)];
+const nonPawnCorrHist: Int16Array[] = [new Int16Array(16384), new Int16Array(16384)];
+
 const PIECE_VALUES: Record<string, number> = {
   p: 100, n: 320, b: 335, r: 500, q: 950, k: 20000
 };
@@ -82,6 +86,44 @@ export function pieceToIdx(piece: string, color: 'w' | 'b'): number {
   const pieceMap: Record<string, number> = { p: 0, n: 1, b: 2, r: 3, q: 4, k: 5 };
   const base = pieceMap[piece.toLowerCase()] || 0;
   return base + (color === 'b' ? 6 : 0);
+}
+
+function computePawnKey(board: ({ type: string; color: string } | null)[][]): number {
+  let key = 0;
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const p = board[r][c];
+      if (p && p.type === 'p') {
+        const idx = r * 8 + c + (p.color === 'b' ? 64 : 0);
+        key = (key ^ Math.imul(idx, 0x9e3779b9)) & 0x3fff;
+      }
+    }
+  }
+  return key;
+}
+
+function computeNonPawnKey(board: ({ type: string; color: string } | null)[][]): number {
+  let key = 0;
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const p = board[r][c];
+      if (p && p.type !== 'p') {
+        const idx = r * 8 + c + pieceToIdx(p.type, p.color as 'w' | 'b') * 64;
+        key = (key ^ Math.imul(idx, 0x85ebca6b)) & 0x3fff;
+      }
+    }
+  }
+  return key;
+}
+
+function applyFiftyMoveDecay(score: number, fen: string): number {
+  const parts = fen.split(' ');
+  const halfmove = parts[4] ? parseInt(parts[4], 10) : 0;
+  if (halfmove >= 40 && Math.abs(score) < 15000) {
+    const factor = Math.max(0, (100 - halfmove) / 60);
+    return Math.round(score * factor);
+  }
+  return score;
 }
 
 /**
@@ -311,7 +353,23 @@ function pvsSearch(
     if (reEntry) hashMoveUci = reEntry.bestMoveUci;
   }
 
-  const staticEval = evaluatePosition(chess);
+  // Static evaluation with Correction History (CorrHist) and Fifty-Move Decay
+  let rawStaticEval = 0;
+  let staticEval = 0;
+  const turn = chess.turn();
+  const colorIdx = turn === 'w' ? 0 : 1;
+
+  if (!inCheck) {
+    rawStaticEval = evaluatePosition(chess);
+    const board = chess.board();
+    const pKey = computePawnKey(board);
+    const npKey = computeNonPawnKey(board);
+    const pCorr = pawnCorrHist[colorIdx][pKey] || 0;
+    const npCorr = nonPawnCorrHist[colorIdx][npKey] || 0;
+    const corrAdjustment = Math.round((pCorr * 2 + npCorr) / 128);
+    staticEval = Math.max(-25000, Math.min(25000, rawStaticEval + corrAdjustment));
+    staticEval = applyFiftyMoveDecay(staticEval, chess.fen());
+  }
 
   // 1. Reverse Futility Pruning (RFP / Static Null Move Pruning)
   if (depth <= 6 && !inCheck && !isRoot && Math.abs(beta) < 9000) {
@@ -320,7 +378,7 @@ function pvsSearch(
   }
 
   // 2. ProbCut (Probability Cutoff)
-  const PROBCUT_MARGIN = 180;
+  const PROBCUT_MARGIN = 175;
   if (depth >= 5 && !inCheck && !isRoot && Math.abs(beta) < 9000 && staticEval >= beta + PROBCUT_MARGIN) {
     const pBeta = beta + PROBCUT_MARGIN;
     const pScore = -pvsSearch(chess, depth - 4, ply + 1, -pBeta, -pBeta + 1, stats, [], startTime, maxTimeMs, lastMoveUci, lastMovePiece);
@@ -347,7 +405,6 @@ function pvsSearch(
   const moves = chess.moves({ verbose: true });
   if (moves.length === 0) return inCheck ? -25000 + ply : 0;
 
-  const turn = chess.turn();
   moves.sort((a: any, b: any) => {
     const sA = scoreMove(a, hashMoveUci, ply, turn, lastMoveUci, lastMovePiece);
     const sB = scoreMove(b, hashMoveUci, ply, turn, lastMoveUci, lastMovePiece);
@@ -369,7 +426,7 @@ function pvsSearch(
     }
   }
 
-  // 6. Singular Extensions (SE):
+  // 6. Double Singular Extensions & Negative Extensions (SE):
   let singularExtension = 0;
   if (depth >= 6 && !isRoot && ttEntry && ttEntry.depth >= depth - 3 && ttEntry.flag !== TT_FLAG.UPPERBOUND && Math.abs(ttEntry.score) < 15000 && hashMoveUci) {
     const singularMargin = depth * 3;
@@ -392,7 +449,24 @@ function pvsSearch(
     }
 
     if (isSingular) {
-      singularExtension = 1;
+      // Double Singular Extension: If best move beats alternatives by twice the singular margin
+      const doubleSingularBeta = singularBeta - singularMargin;
+      let isDoubleSingular = true;
+      for (const altMove of moves.slice(0, 5)) {
+        const altUci = `${altMove.from}${altMove.to}${altMove.promotion || ''}`;
+        if (altUci === hashMoveUci) continue;
+        chess.move(altMove);
+        const altScore = -pvsSearch(chess, singularDepth, ply + 1, -doubleSingularBeta, -doubleSingularBeta + 1, stats, [], startTime, maxTimeMs, altUci, altMove.piece);
+        chess.undo();
+        if (altScore >= doubleSingularBeta) {
+          isDoubleSingular = false;
+          break;
+        }
+      }
+      singularExtension = isDoubleSingular ? 2 : 1;
+    } else if (depth >= 8 && Math.abs(ttEntry.score) < 10000) {
+      // Negative Extension on non-singular lines
+      depth = depth - 1;
     }
   }
 
@@ -433,10 +507,30 @@ function pvsSearch(
     if (movesSearched === 1) {
       score = -pvsSearch(chess, depth - 1 + singularExtension, ply + 1, -beta, -currentAlpha, stats, childPv, startTime, maxTimeMs, uci, move.piece);
     } else {
-      // Dynamic Late Move Reductions (LMR)
+      // Dynamic Late Move Reductions (LMR) with History Dampening & Check Immunity
       let reduction = 0;
       if (depth >= 3 && movesSearched >= 3 && !isCapture && !isPromotion && !inCheck && !chess.inCheck()) {
-        reduction = Math.min(depth - 1, Math.max(1, Math.floor(0.7 + Math.log(depth) * Math.log(movesSearched) / 2.3)));
+        reduction = 1 + Math.floor(Math.log(depth) * Math.log(movesSearched) / 2.1);
+
+        // History Dampening
+        const fromIdx = squareToIndex(move.from);
+        const toIdx = squareToIndex(move.to);
+        const hist = historyTable[colorIdx][fromIdx][toIdx] || 0;
+        if (hist > 12000) reduction -= 2;
+        else if (hist > 4000) reduction -= 1;
+        else if (hist < -4000) reduction += 1;
+
+        if (chess.inCheck()) reduction -= 1;
+
+        // Passed pawn push deduction
+        if (move.piece === 'p') {
+          const rank = parseInt(move.to[1], 10);
+          if ((turn === 'w' && rank >= 6) || (turn === 'b' && rank <= 3)) {
+            reduction -= 1;
+          }
+        }
+
+        reduction = Math.max(0, Math.min(depth - 2, reduction));
       }
 
       score = -pvsSearch(chess, depth - 1 - reduction, ply + 1, -currentAlpha - 1, -currentAlpha, stats, childPv, startTime, maxTimeMs, uci, move.piece);
@@ -512,6 +606,16 @@ function pvsSearch(
     }
   }
 
+  // Update Correction History (CorrHist) on stable leaf results
+  if (!inCheck && !isRoot && Math.abs(bestScore) < 9000) {
+    const board = chess.board();
+    const pKey = computePawnKey(board);
+    const npKey = computeNonPawnKey(board);
+    const errorBonus = Math.max(-1024, Math.min(1024, (bestScore - rawStaticEval) * 32));
+    pawnCorrHist[colorIdx][pKey] = Math.round(pawnCorrHist[colorIdx][pKey] * 0.88 + errorBonus * 0.12);
+    nonPawnCorrHist[colorIdx][npKey] = Math.round(nonPawnCorrHist[colorIdx][npKey] * 0.90 + (errorBonus / 2) * 0.10);
+  }
+
   // Save to Transposition Table
   let ttFlag: typeof TT_FLAG[keyof typeof TT_FLAG] = TT_FLAG.EXACT;
   if (bestScore <= alpha) ttFlag = TT_FLAG.UPPERBOUND;
@@ -533,7 +637,7 @@ function pvsSearch(
   return bestScore;
 }
 
-// Iterative Deepening Root Search with Best-Move Stability Time Manager
+// Iterative Deepening Root Search with Progressive Aspiration Windows & Stability Time Manager
 function executeRootSearch(targetDepth = 12, maxTimeMs = 3000) {
   isSearching = true;
   stopRequested = false;
@@ -558,20 +662,42 @@ function executeRootSearch(targetDepth = 12, maxTimeMs = 3000) {
   for (let currentDepth = 1; currentDepth <= targetDepth; currentDepth++) {
     if (!isSearching || (Date.now() - startTime) >= maxTimeMs) break;
 
-    const pv: string[] = [];
+    let pv: string[] = [];
+    let delta = 25;
     let alpha = -30000;
     let beta = 30000;
+    let score = 0;
 
-    // Aspiration Windows for depth >= 4
+    // Progressive Aspiration Windows for depth >= 4
     if (currentDepth >= 4) {
-      alpha = Math.max(-30000, bestScore - 50);
-      beta = Math.min(30000, bestScore + 50);
-    }
+      alpha = Math.max(-30000, bestScore - delta);
+      beta = Math.min(30000, bestScore + delta);
 
-    let score = pvsSearch(currentChess, currentDepth, 0, alpha, beta, stats, pv, startTime, maxTimeMs, null, null);
+      while (true) {
+        pv = [];
+        score = pvsSearch(currentChess, currentDepth, 0, alpha, beta, stats, pv, startTime, maxTimeMs, null, null);
+        if (!isSearching) break;
 
-    // Re-search if failed low or high
-    if (currentDepth >= 4 && (score <= alpha || score >= beta)) {
+        if (score <= alpha) {
+          // Fail low: inaccuracy danger! Widen alpha and increase search urgency
+          alpha = Math.max(-30000, alpha - delta * 2);
+          delta = Math.floor(delta * 1.6) + 15;
+          moveFlips += 2;
+        } else if (score >= beta) {
+          // Fail high: winning breakthrough!
+          beta = Math.min(30000, beta + delta * 2);
+          delta = Math.floor(delta * 1.6) + 15;
+        } else {
+          break; // Clean within window
+        }
+
+        if (alpha <= -20000 && beta >= 20000) {
+          pv = [];
+          score = pvsSearch(currentChess, currentDepth, 0, -30000, 30000, stats, pv, startTime, maxTimeMs, null, null);
+          break;
+        }
+      }
+    } else {
       score = pvsSearch(currentChess, currentDepth, 0, -30000, 30000, stats, pv, startTime, maxTimeMs, null, null);
     }
 
@@ -598,7 +724,7 @@ function executeRootSearch(targetDepth = 12, maxTimeMs = 3000) {
     // Time Management: Adjust based on move stability
     if (bestMoveUci === lastBestMoveUci) {
       stableIterations++;
-      if (stableIterations >= 3 && currentDepth >= 4 && elapsedMs > maxTimeMs * 0.55) {
+      if (stableIterations >= 3 && currentDepth >= 4 && elapsedMs > maxTimeMs * 0.55 && moveFlips === 0) {
         break; // Solid move: early cut to preserve time budget
       }
     } else {
@@ -607,7 +733,7 @@ function executeRootSearch(targetDepth = 12, maxTimeMs = 3000) {
       moveFlips++;
     }
 
-    const dynamicLimit = moveFlips >= 2 ? maxTimeMs * 0.90 : maxTimeMs * 0.65;
+    const dynamicLimit = moveFlips >= 2 ? maxTimeMs * 0.95 : maxTimeMs * 0.70;
     if (elapsedMs >= dynamicLimit) break;
   }
 
