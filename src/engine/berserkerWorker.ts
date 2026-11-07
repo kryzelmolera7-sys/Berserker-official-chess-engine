@@ -16,6 +16,7 @@
 
 import { Chess } from 'chess.js';
 import { evaluateBRnnueV030, evaluateBerserker10Nnue } from './brnnueDualEval';
+import { searchHybridNnueMcts } from './berserkerMctsHybrid';
 
 const ENGINE_NAME = "Berserker v0.4.0";
 const ENGINE_AUTHOR = "Berserker Engine Team";
@@ -42,6 +43,7 @@ let isSearching = false;
 let stopRequested = false;
 
 let evalMode = 'brnnue-v030';
+let searchMode = 'Hybrid-MCTS-PVS'; // 'Hybrid-MCTS-PVS' | 'Pure-PVS' | 'Pure-MCTS'
 let threads = 4;
 let hashMb = 64;
 let multiPv = 1;
@@ -757,6 +759,7 @@ self.onmessage = function (event) {
       self.postMessage('option name Hash type spin default 64 min 16 max 65536');
       self.postMessage('option name MultiPV type spin default 1 min 1 max 5');
       self.postMessage('option name EvalMode type combo default brnnue-v030 var brnnue-v030 var berserker-1.0-nnue var aura-nnue');
+      self.postMessage('option name SearchMode type combo default Hybrid-MCTS-PVS var Hybrid-MCTS-PVS var Pure-PVS var Pure-MCTS');
       self.postMessage('option name TacticalContempt type spin default 45 min -100 max 100');
       self.postMessage('option name KingAttackScale type spin default 140 min 50 max 250');
       self.postMessage(`option name NNUE_Net type string default ${DEFAULT_NET}`);
@@ -809,7 +812,21 @@ self.onmessage = function (event) {
       const timeIdx = parts.indexOf('movetime');
       if (timeIdx !== -1 && parts[timeIdx + 1]) movetime = parseInt(parts[timeIdx + 1], 10);
 
-      executeRootSearch(depth, movetime);
+      if (searchMode === 'Hybrid-MCTS-PVS') {
+        const hybridRes = searchHybridNnueMcts(currentChess.fen(), {
+          maxTimeMs: movetime,
+          safetyNetDepth: Math.min(depth, 8),
+          simulations: 800
+        });
+
+        const topMovesStr = hybridRes.mctsTopMoves.map(m => `${m.uci}(${m.visits}v,${m.qValue}q)`).join(' ');
+        self.postMessage(
+          `info depth ${hybridRes.pvsDepth} score cp ${hybridRes.scoreCp} visits ${hybridRes.mctsVisits} sims ${hybridRes.totalSimulations} arbiter ${hybridRes.decisionReason} delta ${hybridRes.safetyNetDeltaCp} time ${hybridRes.timeMs} top [${topMovesStr}] pv ${hybridRes.bestMoveUci}`
+        );
+        self.postMessage(`bestmove ${hybridRes.bestMoveUci}`);
+      } else {
+        executeRootSearch(depth, movetime);
+      }
       break;
     }
 
@@ -824,6 +841,7 @@ self.onmessage = function (event) {
         const optName = parts[nameIdx + 1];
         const optVal = parts[valIdx + 1];
         if (optName === 'EvalMode') evalMode = optVal;
+        if (optName === 'SearchMode') searchMode = optVal;
         if (optName === 'Threads') threads = parseInt(optVal, 10);
         if (optName === 'Hash') hashMb = parseInt(optVal, 10);
         if (optName === 'MultiPV') multiPv = parseInt(optVal, 10);

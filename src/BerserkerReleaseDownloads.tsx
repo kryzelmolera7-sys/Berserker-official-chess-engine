@@ -364,13 +364,13 @@ const DOWNLOAD_ITEMS: DownloadItem[] = [
     name: 'Berserker v0.4.0 Universal UCI Engine',
     fileName: 'berserker-v0.4.0-cli.js',
     category: 'windows',
-    size: '37.8 KB',
+    size: '43.3 KB',
     type: 'Universal Runtime (JS / Node / Bun)',
-    description: 'Upgraded grandmaster core with Correction History, Double Singular Extensions, ProbCut, Multi-Cut, and 50-move conversion protection. Runs identically on Windows, Linux, macOS, and Android.',
-    sha256: '5a1e062295c5f20785b4203a9dfb46be45916ab007d004b4896610e1accc0db1',
+    description: 'Grandmaster core with Hybrid MCTS-PVS Dual Arbiter, BRnnue PUCT Policy Guidance, Tactical Horizon Safety Net, Correction History (CorrHist), Double Singular Extensions, and 50-move conversion protection. Runs identically on Windows, Linux, macOS, and Android.',
+    sha256: '87cab9b56fff2d18f04a087bbe23028be4b7d48e69fe333d5105d392b6829757',
     downloadUrl: '/downloads/berserker-v0.4.0-cli.js',
     recommendedFor: 'All Operating Systems (Universal)',
-    badge: 'Universal'
+    badge: 'Hybrid MCTS+PVS'
   }
 ];
 

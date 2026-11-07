@@ -40,6 +40,10 @@ let evalMode = 'brnnue-v030'; // 'brnnue-v030' | 'berserker-1.0-nnue' | 'aura-nn
 export function setEvalMode(mode) {
   evalMode = mode;
 }
+let searchMode = 'Hybrid-MCTS-PVS'; // 'Hybrid-MCTS-PVS' | 'Pure-PVS' | 'Pure-MCTS'
+export function setSearchMode(mode) {
+  searchMode = mode;
+}
 let threads = 4;
 let hashMb = 64;
 let multiPv = 1;
@@ -751,6 +755,101 @@ function pvsSearch(chess, depth, ply, alpha, beta, stats, pvArray, startTime, ma
   return bestScore;
 }
 
+function cpToValueCli(cp) {
+  if (Math.abs(cp) > 15000) return cp > 0 ? 1.0 : -1.0;
+  return Math.tanh(cp / 350);
+}
+
+function computeMovePriorsCli(chess, moves) {
+  if (moves.length === 0) return [];
+  const rawScores = new Array(moves.length);
+  for (let i = 0; i < moves.length; i++) {
+    const m = moves[i];
+    let score = 0;
+    if (m.captured) {
+      const see = staticExchangeEvaluation(chess, m);
+      score += see >= 0 ? 180 + see * 0.5 : -150;
+    }
+    if (m.promotion) score += m.promotion === 'q' ? 300 : 80;
+    if (m.san && m.san.includes('+')) score += 70;
+    if (['e4', 'd4', 'e5', 'd5', 'c4', 'f4', 'c5', 'f5'].includes(m.to)) score += 25;
+    if (['n', 'b'].includes(m.piece)) score += 15;
+    if (m.san === 'O-O' || m.san === 'O-O-O') score += 65;
+    rawScores[i] = score;
+  }
+  const maxScore = Math.max(...rawScores);
+  const exps = rawScores.map(s => Math.exp((s - maxScore) / 60.0));
+  const sumExp = exps.reduce((a, b) => a + b, 0);
+  return exps.map(e => e / Math.max(1e-9, sumExp));
+}
+
+function runMctsSearchCli(chess, maxSims = 800, maxTimeMs = 1500, cPuct = 2.25) {
+  const startFen = chess.fen();
+  const rootMoves = chess.moves({ verbose: true });
+  if (rootMoves.length === 0) return null;
+
+  const priors = computeMovePriorsCli(chess, rootMoves);
+  const rootChildren = rootMoves.map((m, i) => ({
+    move: m,
+    uci: `${m.from}${m.to}${m.promotion || ''}`,
+    san: m.san,
+    visits: 0,
+    totalValue: 0,
+    qValue: 0,
+    prior: priors[i]
+  }));
+
+  const startTime = Date.now();
+  let sims = 0;
+
+  while (sims < maxSims) {
+    if (sims % 32 === 0 && (Date.now() - startTime) >= maxTimeMs) break;
+
+    const rootVisitsSqrt = Math.sqrt(Math.max(1, sims));
+    let bestChildIdx = 0;
+    let bestPuct = -Infinity;
+
+    for (let i = 0; i < rootChildren.length; i++) {
+      const c = rootChildren[i];
+      const qVal = c.visits === 0 ? 0 : c.totalValue / c.visits;
+      const uVal = cPuct * c.prior * (rootVisitsSqrt / (1 + c.visits));
+      const puct = qVal + uVal;
+      if (puct > bestPuct) {
+        bestPuct = puct;
+        bestChildIdx = i;
+      }
+    }
+
+    const chosen = rootChildren[bestChildIdx];
+    const simChess = new Chess(startFen);
+    simChess.move(chosen.move);
+
+    let val = 0;
+    if (simChess.isCheckmate()) {
+      val = -1.0;
+    } else if (simChess.isDraw()) {
+      val = 0.0;
+    } else {
+      const evalCp = evaluatePosition(simChess, evalMode);
+      val = cpToValueCli(evalCp);
+    }
+
+    const rootVal = -val;
+    chosen.visits++;
+    chosen.totalValue += rootVal;
+    chosen.qValue = chosen.totalValue / chosen.visits;
+    sims++;
+  }
+
+  rootChildren.sort((a, b) => b.visits - a.visits);
+  return {
+    bestChild: rootChildren[0],
+    children: rootChildren,
+    sims,
+    timeMs: Date.now() - startTime
+  };
+}
+
 // ----------------------------------------------------------------------------
 // Iterative Deepening Search with Progressive Aspiration Windows & Stability Time Manager
 // ----------------------------------------------------------------------------
@@ -774,6 +873,75 @@ export function searchRoot(chess, targetDepth = 8, maxTimeMs = 3000) {
   };
 
   let bestMoveUci = `${legalMoves[0].from}${legalMoves[0].to}${legalMoves[0].promotion || ''}`;
+
+  if (searchMode === 'Hybrid-MCTS-PVS') {
+    // 1. Run MCTS Search with BRnnue PUCT Policy Guidance
+    const mctsResult = runMctsSearchCli(chess, 600, maxTimeMs * 0.65, 2.25);
+    const mctsUci = mctsResult?.bestChild?.uci || bestMoveUci;
+
+    // 2. Run PVS Tactical Safety Net Search
+    const remainingTime = Math.max(120, maxTimeMs - (mctsResult ? mctsResult.timeMs : 0));
+    const pvsSearchDepth = Math.min(targetDepth, 7);
+    let pvsBestUci = bestMoveUci;
+    let pvsBestScore = 0;
+
+    for (let d = 1; d <= pvsSearchDepth; d++) {
+      const pv = [];
+      const score = pvsSearch(chess, d, 0, -30000, 30000, stats, pv, startTime, remainingTime);
+      if (pv.length > 0) {
+        pvsBestUci = pv[0];
+        pvsBestScore = score;
+      }
+      if ((Date.now() - startTime) >= remainingTime) break;
+    }
+
+    // 3. Dual Arbiter: Tactical Safety Net override check
+    let chosenUci = mctsUci;
+    let reason = 'mcts-strategic';
+    let deltaCp = 0;
+
+    if (mctsUci === pvsBestUci) {
+      reason = 'consensus';
+      chosenUci = mctsUci;
+    } else {
+      try {
+        const testChess = new Chess(chess.fen());
+        const mctsMoveObj = legalMoves.find(m => `${m.from}${m.to}${m.promotion || ''}` === mctsUci);
+        if (mctsMoveObj) {
+          testChess.move(mctsMoveObj);
+          const oppPv = [];
+          const oppScore = pvsSearch(testChess, Math.max(2, pvsSearchDepth - 1), 0, -30000, 30000, stats, oppPv, Date.now(), 200);
+          const mctsMoveScore = -oppScore;
+          deltaCp = pvsBestScore - mctsMoveScore;
+
+          if (deltaCp > 140) {
+            reason = 'safety-net-override';
+            chosenUci = pvsBestUci;
+          } else {
+            reason = 'mcts-strategic';
+            chosenUci = mctsUci;
+          }
+        }
+      } catch (e) {
+        chosenUci = pvsBestUci;
+        reason = 'safety-net-override';
+      }
+    }
+
+    const elapsedMs = Math.max(1, Date.now() - startTime);
+    const totalNodes = stats.nodes + stats.qnodes;
+    const nps = Math.round((totalNodes / elapsedMs) * 1000);
+    const mctsVisits = mctsResult?.bestChild?.visits || 0;
+    const mctsSims = mctsResult?.sims || 0;
+
+    process.stdout.write(
+      `info depth ${pvsSearchDepth} score cp ${pvsBestScore} nodes ${totalNodes} nps ${nps} time ${elapsedMs} visits ${mctsVisits} sims ${mctsSims} arbiter ${reason} delta ${deltaCp} pv ${chosenUci}\n`
+    );
+
+    isSearching = false;
+    process.stdout.write(`bestmove ${chosenUci}\n`);
+    return;
+  }
   let bestScore = 0;
   let lastBestMoveUci = '';
   let moveFlips = 0;
@@ -955,6 +1123,7 @@ export function initUciLoop() {
       log('option name Hash type spin default 64 min 16 max 65536');
       log('option name MultiPV type spin default 1 min 1 max 5');
       log('option name EvalMode type combo default brnnue-v030 var brnnue-v030 var berserker-1.0-nnue var aura-nnue');
+      log('option name SearchMode type combo default Hybrid-MCTS-PVS var Hybrid-MCTS-PVS var Pure-PVS var Pure-MCTS');
       log('option name TacticalContempt type spin default 45 min -100 max 100');
       log('option name KingAttackScale type spin default 140 min 50 max 250');
       log(`option name NNUE_Net type string default ${DEFAULT_NET}`);
@@ -1042,6 +1211,7 @@ export function initUciLoop() {
         const optName = parts[nameIdx + 1];
         const optVal = parts[valIdx + 1];
         if (optName === 'EvalMode') evalMode = optVal;
+        if (optName === 'SearchMode') searchMode = optVal;
         if (optName === 'Threads') threads = parseInt(optVal, 10);
         if (optName === 'Hash') hashMb = parseInt(optVal, 10);
         if (optName === 'MultiPV') multiPv = parseInt(optVal, 10);

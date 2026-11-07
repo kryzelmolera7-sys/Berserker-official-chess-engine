@@ -35,15 +35,16 @@ const manifest = {
   date: "2026-11-06",
   status: "Official Stable Multi-Platform Release",
   features: [
-    "Singular Extensions (SE)",
-    "Multi-Ply Continuation History (Conthist, 768x768)",
+    "Hybrid MCTS-PVS Dual Arbiter (PUCT Policy Guidance + Tactical Safety Net)",
+    "Tactical Horizon Alpha-Beta Guardian with Automatic Blunder Override",
+    "Correction History (CorrHist) with 16,384 Pawn & Non-Pawn Buckets",
+    "Singular Extensions (SE) & Double Singular Extensions (+2 plies)",
+    "Multi-Ply Continuation History (Conthist, 768x768) & Capture History",
     "Static Exchange Evaluation (SEE) Pruning",
-    "ProbCut (Probability Cutoff)",
-    "Multi-Cut Subtree Pruning",
+    "ProbCut (Probability Cutoff) & Multi-Cut Subtree Pruning",
     "Expanded HalfKAv2-1536x2 & 2048x2 Neural Net Architecture (45.3 MB - 68.5 MB)",
-    "16-Zone Spatial King Bucketing",
-    "Dynamic MoE Neural Attention Router",
-    "WDL-Curved Sigmoid Evaluation Rescaling",
+    "16-Zone Spatial King Bucketing & 50-Move Rule Conversion Decay",
+    "Dynamic MoE Neural Attention Router & Progressive Geometric Aspiration Windows",
     "Multi-Platform: Windows (AVX2/Modern/ARM64), Linux (AVX2/Modern/ARM64), macOS (Apple Silicon/Intel), Android"
   ],
   downloads: items

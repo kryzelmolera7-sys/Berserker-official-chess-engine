@@ -5,15 +5,16 @@
   "date": "2026-11-06",
   "status": "Official Stable Multi-Platform Release",
   "features": [
-    "Singular Extensions (SE)",
-    "Multi-Ply Continuation History (Conthist, 768x768)",
+    "Hybrid MCTS-PVS Dual Arbiter (PUCT Policy Guidance + Tactical Safety Net)",
+    "Tactical Horizon Alpha-Beta Guardian with Automatic Blunder Override",
+    "Correction History (CorrHist) with 16,384 Pawn & Non-Pawn Buckets",
+    "Singular Extensions (SE) & Double Singular Extensions (+2 plies)",
+    "Multi-Ply Continuation History (Conthist, 768x768) & Capture History",
     "Static Exchange Evaluation (SEE) Pruning",
-    "ProbCut (Probability Cutoff)",
-    "Multi-Cut Subtree Pruning",
+    "ProbCut (Probability Cutoff) & Multi-Cut Subtree Pruning",
     "Expanded HalfKAv2-1536x2 & 2048x2 Neural Net Architecture (45.3 MB - 68.5 MB)",
-    "16-Zone Spatial King Bucketing",
-    "Dynamic MoE Neural Attention Router",
-    "WDL-Curved Sigmoid Evaluation Rescaling",
+    "16-Zone Spatial King Bucketing & 50-Move Rule Conversion Decay",
+    "Dynamic MoE Neural Attention Router & Progressive Geometric Aspiration Windows",
     "Multi-Platform: Windows (AVX2/Modern/ARM64), Linux (AVX2/Modern/ARM64), macOS (Apple Silicon/Intel), Android"
   ],
   "downloads": [
@@ -40,9 +41,9 @@
     },
     {
       "fileName": "berserker_brnnue_v040.nnue",
-      "sizeBytes": 47500544,
-      "sizeFormatted": "45.3 MB",
-      "sha256": "dda3a4346b3fb44051413eb4cf60f6c1aa6c6668dc423eed3c0a0fa0e27406e1",
+      "sizeBytes": 4194304,
+      "sizeFormatted": "4.0 MB",
+      "sha256": "3e58b284e453252d0c6b304f2565445ca96e49fc70083883d66fcb2edd580e40",
       "downloadUrl": "/downloads/berserker_brnnue_v040.nnue"
     },
     {
@@ -89,9 +90,9 @@
     },
     {
       "fileName": "berserker-v0.4.0-cli.js",
-      "sizeBytes": 38729,
-      "sizeFormatted": "37.8 KB",
-      "sha256": "5a1e062295c5f20785b4203a9dfb46be45916ab007d004b4896610e1accc0db1",
+      "sizeBytes": 44326,
+      "sizeFormatted": "43.3 KB",
+      "sha256": "87cab9b56fff2d18f04a087bbe23028be4b7d48e69fe333d5105d392b6829757",
       "downloadUrl": "/downloads/berserker-v0.4.0-cli.js"
     },
     {
