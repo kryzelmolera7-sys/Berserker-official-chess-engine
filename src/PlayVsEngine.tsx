@@ -1699,7 +1699,7 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <Terminal className="w-4 h-4 text-purple-400" />
-                <h4 className="font-bold text-sm text-white">Live Berserker v0.4.0 dev-7000f01 UCI Terminal</h4>
+                <h4 className="font-bold text-sm text-white">Live Berserker v0.4.0 UCI Terminal</h4>
                 <span className="text-[10px] font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded">
                   {isWasmReady ? 'READY (BRNNUEV030 DUAL ACTIVE)' : 'INITIALIZING'}
                 </span>

@@ -1,0 +1,69 @@
+{
+  "release": "Berserker v0.4.0",
+  "version": "0.4.0",
+  "author": "Berserker Engine Team",
+  "date": "2026-11-06",
+  "status": "Official Stable Release",
+  "features": [
+    "Singular Extensions (SE)",
+    "Multi-Ply Continuation History (Conthist, 768x768)",
+    "Static Exchange Evaluation (SEE) Pruning",
+    "ProbCut (Probability Cutoff)",
+    "Multi-Cut Subtree Pruning",
+    "16-Zone Spatial King Bucketing",
+    "Dynamic MoE Neural Attention Router",
+    "WDL-Curved Sigmoid Evaluation Rescaling",
+    "Best-Move Stability Time Allocation"
+  ],
+  "downloads": [
+    {
+      "fileName": "berserker-v0.4.0-cli.js",
+      "sizeBytes": 31321,
+      "sizeFormatted": "30.6 KB",
+      "sha256": "56b266d2da15591f881201181d97c302f9ad07363225f5388e490db33513e664",
+      "downloadUrl": "/downloads/berserker-v0.4.0-cli.js"
+    },
+    {
+      "fileName": "berserker-v0.4.0.cpp",
+      "sizeBytes": 5184,
+      "sizeFormatted": "5.1 KB",
+      "sha256": "cd6ebc7160d0ebf738a73d7e07d44ca9fd5104fe054d300c4b05bc016af75ded",
+      "downloadUrl": "/downloads/berserker-v0.4.0.cpp"
+    },
+    {
+      "fileName": "berserker_brnnue_v040.nnue",
+      "sizeBytes": 4194304,
+      "sizeFormatted": "4.0 MB",
+      "sha256": "3e58b284e453252d0c6b304f2565445ca96e49fc70083883d66fcb2edd580e40",
+      "downloadUrl": "/downloads/berserker_brnnue_v040.nnue"
+    },
+    {
+      "fileName": "berserker-v0.4.0-windows.bat",
+      "sizeBytes": 839,
+      "sizeFormatted": "0.8 KB",
+      "sha256": "d8deb4d2f28e4860ea8924fd2f7ff0b0615a776c6dea6f0fdb5522c4c75041db",
+      "downloadUrl": "/downloads/berserker-v0.4.0-windows.bat"
+    },
+    {
+      "fileName": "berserker-v0.4.0-linux.sh",
+      "sizeBytes": 700,
+      "sizeFormatted": "0.7 KB",
+      "sha256": "d0090913844f6c17c2f56703e0c19fb5a05d72e4b45f2172f7d2610ea806d1c7",
+      "downloadUrl": "/downloads/berserker-v0.4.0-linux.sh"
+    },
+    {
+      "fileName": "berserker-cutechess.json",
+      "sizeBytes": 558,
+      "sizeFormatted": "0.5 KB",
+      "sha256": "4aafb7e708d6f570395fbc316edcceb2491bed45e25e2313882a1ec6dfbdb9b6",
+      "downloadUrl": "/downloads/berserker-cutechess.json"
+    },
+    {
+      "fileName": "berserker-arena.eng",
+      "sizeBytes": 318,
+      "sizeFormatted": "0.3 KB",
+      "sha256": "318772b90d3462fbf1b5b9c0adbc08b1204d70737f2f68835bee79eb0906c9e7",
+      "downloadUrl": "/downloads/berserker-arena.eng"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "name": "Berserker v0.4.0",
+  "command": "node",
+  "arguments": ["berserker-v0.4.0-cli.js"],
+  "protocol": "uci",
+  "workingDirectory": ".",
+  "options": [
+    { "name": "Threads", "type": "spin", "value": 4 },
+    { "name": "Hash", "type": "spin", "value": 128 },
+    { "name": "EvalMode", "type": "combo", "value": "brnnue-v040" },
+    { "name": "TacticalContempt", "type": "spin", "value": 45 },
+    { "name": "KingAttackScale", "type": "spin", "value": 140 },
+    { "name": "NNUE_Net", "type": "string", "value": "berserker_brnnue_v040.nnue" }
+  ]
+}

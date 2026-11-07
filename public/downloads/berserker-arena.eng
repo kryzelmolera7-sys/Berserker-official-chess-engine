@@ -1,0 +1,17 @@
+[Engine]
+Name=Berserker v0.4.0
+Author=Berserker Engine Team
+Version=0.4.0
+Protocol=UCI
+Executable=berserker-v0.4.0-windows.bat
+CommandLine=
+SendSpecialOption=true
+Priority=High
+InitString=uci
+[Options]
+Threads=4
+Hash=128
+EvalMode=brnnue-v040
+TacticalContempt=45
+KingAttackScale=140
+NNUE_Net=berserker_brnnue_v040.nnue

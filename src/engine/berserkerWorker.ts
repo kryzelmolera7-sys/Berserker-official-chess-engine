@@ -17,9 +17,9 @@
 import { Chess } from 'chess.js';
 import { evaluateBRnnueV030, evaluateBerserker10Nnue } from './brnnueDualEval';
 
-const ENGINE_NAME = "Berserker v0.4.0 dev-7000f01";
+const ENGINE_NAME = "Berserker v0.4.0";
 const ENGINE_AUTHOR = "Berserker Engine Team";
-const DEFAULT_NET = "berserker_brnnue_v030.nnue";
+const DEFAULT_NET = "berserker_brnnue_v040.nnue";
 
 // TT Entry Flags
 const TT_FLAG = {

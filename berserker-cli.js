@@ -2,7 +2,7 @@
 
 /**
  * ============================================================================
- * Berserker v0.4.0 dev-7000f01 Standalone UCI Chess Engine
+ * Berserker v0.4.0 Official Standalone UCI Chess Engine
  * ============================================================================
  * Architecture:
  * - Clean, pure, standalone UCI Chess Engine
@@ -28,10 +28,10 @@ import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { Chess } from 'chess.js';
 
-export const ENGINE_NAME = "Berserker v0.4.0 dev-7000f01";
-export const ENGINE_VERSION = "0.4.0-dev-7000f01";
+export const ENGINE_NAME = "Berserker v0.4.0";
+export const ENGINE_VERSION = "0.4.0";
 export const ENGINE_AUTHOR = "Berserker Engine Team";
-export const DEFAULT_NET = "berserker_brnnue_v030.nnue";
+export const DEFAULT_NET = "berserker_brnnue_v040.nnue";
 
 // ----------------------------------------------------------------------------
 // Engine Options & Global Search State

@@ -8,18 +8,20 @@ import {
   Cloud, 
   LogIn, 
   LogOut,
-  Award
+  Award,
+  Download
 } from 'lucide-react';
 import { UciEngineConsole } from './UciEngineConsole';
 import { EngineCliGuide } from './EngineCliGuide';
 import { BerserkerNnueInspector } from './BerserkerNnueInspector';
 import { PlayVsEngine } from './PlayVsEngine';
+import { BerserkerReleaseDownloads } from './BerserkerReleaseDownloads';
 import { CloudGamesModal } from './CloudGamesModal';
 import { loginWithGoogle, logoutUser, subscribeAuth } from './firebaseService';
 import type { User } from 'firebase/auth';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'terminal' | 'guide' | 'neural' | 'board'>('terminal');
+  const [activeTab, setActiveTab] = useState<'terminal' | 'guide' | 'neural' | 'board' | 'downloads'>('downloads');
   const [showCloudGamesModal, setShowCloudGamesModal] = useState<boolean>(false);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState<boolean>(false);
@@ -64,20 +66,32 @@ export default function App() {
                 <span>Berserker</span>
               </h1>
               <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/40 font-bold uppercase">
-                v0.2.0
+                v0.4.0 Official
               </span>
               <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-bold hidden sm:inline-block">
-                +417 Elo vs Baseline
+                +570 Elo (Official)
               </span>
             </div>
             <p className="text-[11px] text-slate-400">
-              Standalone UCI Engine • Berserker HalfKP-Dual NNUE & Aura-NNUE (GeoSparse-MoE)
+              Standalone UCI Engine • BRnnue Dual Architecture & Aura-NNUE (GeoSparse-MoE)
             </p>
           </div>
         </div>
 
-        {/* Tab Navigation: Pure Engine Terminal, CLI Guide, NNUE, Board */}
+        {/* Tab Navigation: Pure Engine Terminal, CLI Guide, NNUE, Board, Downloads */}
         <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800">
+          <button
+            onClick={() => setActiveTab('downloads')}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+              activeTab === 'downloads'
+                ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20 font-extrabold'
+                : 'text-amber-400 hover:text-amber-300'
+            }`}
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>v0.4.0 Downloads</span>
+          </button>
+
           <button
             onClick={() => setActiveTab('terminal')}
             className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
@@ -99,7 +113,7 @@ export default function App() {
             }`}
           >
             <Code2 className="w-3.5 h-3.5" />
-            <span>CLI & +570 Elo Benchmark</span>
+            <span>CLI & Benchmark</span>
           </button>
 
           <button
@@ -111,7 +125,7 @@ export default function App() {
             }`}
           >
             <Layers className="w-3.5 h-3.5 text-pink-400" />
-            <span>SF NNUE & Aura-NNUE</span>
+            <span>BRnnue Architecture</span>
           </button>
 
           <button
@@ -166,6 +180,11 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 p-4 lg:p-8 max-w-7xl mx-auto w-full">
+        {/* Tab 0: Release Downloads Hub */}
+        {activeTab === 'downloads' && (
+          <BerserkerReleaseDownloads />
+        )}
+
         {/* Tab 1: Direct UCI Engine Shell */}
         {activeTab === 'terminal' && (
           <UciEngineConsole />
@@ -176,7 +195,7 @@ export default function App() {
           <EngineCliGuide />
         )}
 
-        {/* Tab 3: SF NNUE & Aura-NNUE Architecture & Weight Inspector */}
+        {/* Tab 3: BRnnue & Architecture Inspector */}
         {activeTab === 'neural' && (
           <BerserkerNnueInspector />
         )}
@@ -195,7 +214,7 @@ export default function App() {
 
       {/* Clean Footer */}
       <footer className="border-t border-slate-900 bg-slate-950/80 px-4 lg:px-8 py-3 text-center text-xs text-slate-500">
-        Berserker v0.2.0 Standalone Engine • +417 Elo vs Previous Baseline • Berserker-NNUE & Aura-NNUE (GeoSparse-MoE)
+        Berserker v0.4.0 Official Release • +570 Elo vs Previous Baseline • BRnnue Dual Architecture & Aura-NNUE (GeoSparse-MoE)
       </footer>
     </div>
   );
