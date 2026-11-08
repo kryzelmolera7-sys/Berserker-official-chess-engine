@@ -39,8 +39,8 @@ export const UciEngineConsole: React.FC = () => {
   const [activeEvalMode, setActiveEvalMode] = useState<'brnnue-v030' | 'berserker-1.0-nnue' | 'aura-nnue'>('brnnue-v030');
   const [customFen, setCustomFen] = useState<string>('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
   const [localLogs, setLocalLogs] = useState<string[]>([
-    'Berserker v0.2.0 Standalone Engine Core Initialized.',
-    'Default Neural Evaluator: BRnnuev030 (Berserker v0.9.0 + PlentyChess Dual NNUE).',
+    'Berserker v0.6.0 Standalone Engine Core Initialized.',
+    'Default Neural Evaluator: Berserker NNUE (Dual Subnet Architecture).',
     'Baseline Model Available: Berserker 1.0 NNUE.',
     'Type UCI commands below or click quick-actions.',
     '--------------------------------------------------------------------------------'
@@ -63,9 +63,9 @@ export const UciEngineConsole: React.FC = () => {
         const dualEval = evaluateBRnnueV030(customFen);
         setLocalLogs((prev) => [
           ...prev,
-          `[BRnnuev030 Dual NNUE] Eval: ${dualEval.centipawns > 0 ? '+' : ''}${(dualEval.centipawns / 100).toFixed(2)} (${dualEval.centipawns} cp)`,
-          `  • Subnet 1 (Berserker v0.9.0 Tactical): ${dualEval.berserker090.centipawns > 0 ? '+' : ''}${(dualEval.berserker090.centipawns / 100).toFixed(2)} (${(dualEval.phaseWeight.berserkerWeight * 100).toFixed(0)}% weight)`,
-          `  • Subnet 2 (PlentyChess Positional):     ${dualEval.plentychess.centipawns > 0 ? '+' : ''}${(dualEval.plentychess.centipawns / 100).toFixed(2)} (${(dualEval.phaseWeight.plentyChessWeight * 100).toFixed(0)}% weight)`,
+          `[Berserker NNUE Dual Architecture] Eval: ${dualEval.centipawns > 0 ? '+' : ''}${(dualEval.centipawns / 100).toFixed(2)} (${dualEval.centipawns} cp)`,
+          `  • Subnet 1 (Berserker Attack):     ${dualEval.berserker090.centipawns > 0 ? '+' : ''}${(dualEval.berserker090.centipawns / 100).toFixed(2)} (${(dualEval.phaseWeight.berserkerWeight * 100).toFixed(0)}% weight)`,
+          `  • Subnet 2 (Berserker Positional): ${dualEval.plentychess.centipawns > 0 ? '+' : ''}${(dualEval.plentychess.centipawns / 100).toFixed(2)} (${(dualEval.phaseWeight.plentyChessWeight * 100).toFixed(0)}% weight)`,
           `  • Phase: ${dualEval.phaseWeight.gamePhase} | Tension: ${dualEval.tacticalTensionIndex} pts | Net: ${dualEval.netId}`,
           `  • WDL: Win ${(dualEval.winProb * 100).toFixed(1)}% | Draw ${(dualEval.drawProb * 100).toFixed(1)}% | Loss ${(dualEval.lossProb * 100).toFixed(1)}%`
         ]);
@@ -134,7 +134,7 @@ export const UciEngineConsole: React.FC = () => {
             onClick={() => {
               setActiveEvalMode('brnnue-v030');
               setOption('EvalMode', 'brnnue-v030');
-              setLocalLogs((p) => [...p, '[UCI] Switched evaluator to BRnnuev030 (Berserker v0.9.0 + PlentyChess Dual NNUE)']);
+              setLocalLogs((p) => [...p, '[UCI] Switched evaluator to Berserker NNUE (Dual Subnet Architecture)']);
             }}
             className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold transition flex items-center gap-1.5 ${
               activeEvalMode === 'brnnue-v030'

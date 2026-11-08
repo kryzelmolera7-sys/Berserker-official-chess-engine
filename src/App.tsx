@@ -21,7 +21,7 @@ import { loginWithGoogle, logoutUser, subscribeAuth } from './firebaseService';
 import type { User } from 'firebase/auth';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'terminal' | 'guide' | 'neural' | 'board' | 'downloads'>('downloads');
+  const [activeTab, setActiveTab] = useState<'terminal' | 'guide' | 'neural' | 'board' | 'downloads'>('board');
   const [showCloudGamesModal, setShowCloudGamesModal] = useState<boolean>(false);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState<boolean>(false);
@@ -202,7 +202,7 @@ export default function App() {
 
         {/* Tab 4: Engine Board Visualizer */}
         {activeTab === 'board' && (
-          <PlayVsEngine maxThreads={4} hashSizeMb={1024} />
+          <PlayVsEngine maxThreads={64} hashSizeMb={32768} />
         )}
       </main>
 
@@ -214,7 +214,7 @@ export default function App() {
 
       {/* Clean Footer */}
       <footer className="border-t border-slate-900 bg-slate-950/80 px-4 lg:px-8 py-3 text-center text-xs text-slate-500">
-        Berserker v0.4.0 Official Release • +570 Elo vs Previous Baseline • BRnnue Dual Architecture & Aura-NNUE (GeoSparse-MoE)
+        Berserker v0.6.0 Official Release • Battle-Hardened Pure-PVS Alpha-Beta & Berserker NNUE • 64 Threads • 32GB Hash
       </footer>
     </div>
   );

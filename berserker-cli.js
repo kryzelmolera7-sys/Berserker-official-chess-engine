@@ -40,12 +40,12 @@ let evalMode = 'brnnue-v030'; // 'brnnue-v030' | 'berserker-1.0-nnue' | 'aura-nn
 export function setEvalMode(mode) {
   evalMode = mode;
 }
-let searchMode = 'Hybrid-MCTS-PVS'; // 'Hybrid-MCTS-PVS' | 'Pure-PVS' | 'Pure-MCTS'
+let searchMode = 'Pure-PVS'; // 'Pure-PVS' | 'Hybrid-MCTS-PVS' | 'Pure-MCTS'
 export function setSearchMode(mode) {
   searchMode = mode;
 }
-let threads = 4;
-let hashMb = 64;
+let threads = 64;
+let hashMb = 32768;
 let multiPv = 1;
 let tacticalContempt = 45;
 let kingAttackScale = 140;
@@ -1199,11 +1199,11 @@ export function initUciLoop() {
     case 'uci':
       log(`id name ${ENGINE_NAME}`);
       log(`id author ${ENGINE_AUTHOR}`);
-      log('option name Threads type spin default 4 min 1 max 64');
-      log('option name Hash type spin default 64 min 16 max 65536');
+      log('option name Threads type spin default 64 min 1 max 64');
+      log('option name Hash type spin default 32768 min 16 max 65536');
       log('option name MultiPV type spin default 1 min 1 max 5');
       log('option name EvalMode type combo default brnnue-v030 var brnnue-v030 var berserker-1.0-nnue var aura-nnue');
-      log('option name SearchMode type combo default Hybrid-MCTS-PVS var Hybrid-MCTS-PVS var Pure-PVS var Pure-MCTS');
+      log('option name SearchMode type combo default Pure-PVS var Pure-PVS var Hybrid-MCTS-PVS var Pure-MCTS');
       log('option name TacticalContempt type spin default 45 min -100 max 100');
       log('option name KingAttackScale type spin default 140 min 50 max 250');
       log(`option name NNUE_Net type string default ${DEFAULT_NET}`);
@@ -1309,8 +1309,8 @@ export function initUciLoop() {
       log(`FEN: ${currentChess.fen()}`);
       log(`Turn: ${currentChess.turn() === 'w' ? 'White' : 'Black'}`);
       log(`BRnnuev030 (Dual NNUE):     ${brnnueCp > 0 ? '+' : ''}${(brnnueCp / 100).toFixed(2)} (${brnnueCp} cp)`);
-      log(`  - Subnet 1 (Berserker v0.9.0): HalfKP-1024 King Attack & Tactical Vectors`);
-      log(`  - Subnet 2 (PlentyChess):     HalfKAv2-1024 Endgame Harmony & Pawn Chains`);
+      log(`  - Subnet 1 (Berserker Attack):     HalfKP-1024 King Attack & Tactical Vectors`);
+      log(`  - Subnet 2 (Berserker Positional): HalfKAv2-1024 Endgame Harmony & Pawn Chains`);
       log(`Berserker 1.0 NNUE:          ${bsz10Cp > 0 ? '+' : ''}${(bsz10Cp / 100).toFixed(2)} (${bsz10Cp} cp)`);
       log(`Aura-NNUE (GeoSparse-MoE):   ${auraCp > 0 ? '+' : ''}${(auraCp / 100).toFixed(2)} (${auraCp} cp)`);
       log(`Delta (BRnnuev030 - Bsz1.0): ${deltaVsBsz10 > 0 ? '+' : ''}${(deltaVsBsz10 / 100).toFixed(2)} (${deltaVsBsz10} cp)`);

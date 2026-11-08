@@ -86,10 +86,10 @@ const DEFAULT_CONFIG: Required<HybridSearchConfig> = {
   cPuctBase: 1.85,
   cPuctFactor: 0.45,
   fpuReduction: 0.25,
-  safetyNetDepth: 5,
-  safetyNetThresholdCp: 140, // If MCTS move is >140cp worse than PVS, override!
+  safetyNetDepth: 6,
+  safetyNetThresholdCp: 35, // Tight safety net: if MCTS move is >35cp worse than PVS, override!
   enableSubtreeReuse: true,
-  enableTacticalRollout: true
+  enableTacticalRollout: false // Direct Berserker NNUE evaluation avoids horizon rollout distortion
 };
 
 // Global search tree cache for Subtree Reuse & Graph Grafting
@@ -155,10 +155,10 @@ export function computeMovePriors(chess: Chess, moves: Move[]): number[] {
     const m = moves[i];
     let score = 0;
 
-    // 1. Material & SEE Exchange Quality
+    // 1. Material & SEE Exchange Quality: only reward winning captures (SEE > 0). Equal trades get 0. Losing trades heavily penalized.
     if (m.captured) {
       const see = staticExchangeEvaluation(chess, m);
-      score += see >= 0 ? 190 + see * 0.5 : -160;
+      score += see > 0 ? 120 + see * 0.3 : (see === 0 ? 0 : -200);
     }
 
     // 2. Promotion bonus
@@ -173,17 +173,17 @@ export function computeMovePriors(chess: Chess, moves: Move[]): number[] {
 
     // 4. Center control & central outposts
     if (['e4', 'd4', 'e5', 'd5'].includes(m.to)) {
-      score += 35;
+      score += 45;
     } else if (['c4', 'f4', 'c5', 'f5'].includes(m.to)) {
-      score += 20;
+      score += 25;
     }
 
     // 5. Piece activity (developing knights and bishops)
     if (['n', 'b'].includes(m.piece)) {
-      score += 18;
+      score += 40;
       // Bonus for forward knight outposts
       if (m.piece === 'n' && ['c3', 'f3', 'c6', 'f6', 'd5', 'e5', 'd4', 'e4'].includes(m.to)) {
-        score += 20;
+        score += 30;
       }
     }
 
@@ -193,9 +193,9 @@ export function computeMovePriors(chess: Chess, moves: Move[]): number[] {
       if (['d', 'e'].includes(m.to[0])) score += 15;
     }
 
-    // 7. King protection in opening
+    // 7. King protection in opening (Castling is top priority)
     if (m.san === 'O-O' || m.san === 'O-O-O') {
-      score += 70;
+      score += 140;
     }
 
     rawScores[i] = score;
@@ -297,7 +297,7 @@ export function runMctsSearch(
   cPuctFactor: number = 0.45,
   fpuReduction: number = 0.25,
   enableReuse: boolean = true,
-  enableRollout: boolean = true
+  enableRollout: boolean = false
 ): { root: MctsNode; completedSims: number; timeMs: number; reused: boolean; reusedVisits: number } {
   const startTime = performance.now();
   let root: MctsNode | null = null;
@@ -582,27 +582,26 @@ export function searchHybridNnueMcts(
         const mctsMovePvsScore = -oppReply.scoreCp;
         safetyNetDeltaCp = pvsScoreCp - mctsMovePvsScore;
 
-        if (safetyNetDeltaCp > config.safetyNetThresholdCp) {
-          // Tactical blunder danger: Safety Net immediately overrides!
+        if (safetyNetDeltaCp > config.safetyNetThresholdCp || safetyNetDeltaCp > 25) {
+          // Tactical blunder guardian: Safety Net immediately overrides to the solid PVS line!
           reason = 'safety-net-override';
           chosenUci = pvsUci;
           const pvsMoveObj = legalMoves.find(m => `${m.from}${m.to}${m.promotion || ''}` === pvsUci);
           chosenSan = pvsMoveObj ? pvsMoveObj.san : pvsResult.bestMoveSan;
         } else {
           // Bayesian Soft Blending:
-          // Weight lambda varies from 0.15 (quiet positional) to 0.70 (high tactical volatility)
           const lambda = 0.15 + 0.55 * tacticalVolatility;
           const mctsNormalizedVisits = mctsBest ? (mctsBest.visits / Math.max(1, root.visits)) : 0;
           const mctsScoreCp = valueToCp(mctsBest.qValue);
 
-          // If MCTS visit confidence is dominant (>55%) and tactical delta is benign (<60cp), strategic line triumphs
-          if (mctsNormalizedVisits > 0.55 && safetyNetDeltaCp < 60) {
+          // If MCTS visit confidence is dominant (>55%) and tactical delta is benign (<20cp), strategic line triumphs
+          if (mctsNormalizedVisits > 0.55 && safetyNetDeltaCp < 20) {
             reason = 'mcts-strategic';
             chosenUci = mctsUci;
             chosenSan = mctsBest.san;
-          } else if (lambda > 0.50 && safetyNetDeltaCp > 80) {
-            // High volatility: bias towards tactical safety
-            reason = 'bayesian-blend';
+          } else if (safetyNetDeltaCp > 15) {
+            // Bias towards tactical safety
+            reason = 'safety-net-override';
             chosenUci = pvsUci;
             const pvsMoveObj = legalMoves.find(m => `${m.from}${m.to}${m.promotion || ''}` === pvsUci);
             chosenSan = pvsMoveObj ? pvsMoveObj.san : pvsResult.bestMoveSan;

@@ -178,13 +178,13 @@ export function BerserkerNnueInspector() {
               </span>
             </div>
             <h1 className="text-3xl font-extrabold text-white tracking-tight flex items-center gap-3">
-              BRnnuev030 Dual NNUE
+              Berserker NNUE
               <span className="text-sm font-mono px-2.5 py-1 rounded-lg bg-purple-500/20 text-purple-300 border border-purple-500/40">
-                Berserker v0.9.0 + PlentyChess
+                Dual Accumulator Architecture
               </span>
             </h1>
             <p className="text-sm text-slate-300 max-w-3xl leading-relaxed">
-              Next-generation dual-accumulator evaluation architecture fusing Jay Honnold's <strong>Berserker v0.9.0 NNUE</strong> (HalfKP-1024 king attack rays and tactical sharpness) with Ankan Banerjee's <strong>PlentyChess NNUE</strong> (HalfKAv2-1024 endgame harmony and pawn structure precision). Dynamic phase gating transitions smoothly across all 24 game phase ticks.
+              Next-generation dual-accumulator evaluation architecture fusing <strong>Berserker Attack Subnet</strong> (HalfKP-1024 king attack rays and tactical sharpness) with <strong>Berserker Positional Subnet</strong> (HalfKAv2-1024 endgame harmony and pawn structure precision). Dynamic phase gating transitions smoothly across all 24 game phase ticks.
             </p>
           </div>
 
@@ -442,7 +442,7 @@ export function BerserkerNnueInspector() {
 
                 <div className="bg-slate-950 p-3 rounded-lg border border-cyan-500/30">
                   <div className="flex justify-between items-center">
-                    <span className="text-[10px] text-cyan-300 block font-semibold">Subnet 2: PlentyChess</span>
+                    <span className="text-[10px] text-cyan-300 block font-semibold">Subnet 2: Berserker Positional</span>
                     <span className="text-[10px] font-mono text-cyan-400">{(brnnueDualEval.phaseWeight.plentyChessWeight * 100).toFixed(0)}%</span>
                   </div>
                   <span className="text-lg font-bold font-mono text-cyan-200 mt-1 block">
@@ -480,17 +480,17 @@ export function BerserkerNnueInspector() {
                   <div
                     style={{ width: `${brnnueDualEval.phaseWeight.berserkerWeight * 100}%` }}
                     className="h-full bg-purple-500 transition-all duration-300"
-                    title="Berserker v0.9.0 Tactical Weight"
+                    title="Berserker Attack Weight"
                   />
                   <div
                     style={{ width: `${brnnueDualEval.phaseWeight.plentyChessWeight * 100}%` }}
                     className="h-full bg-cyan-500 transition-all duration-300"
-                    title="PlentyChess Positional Weight"
+                    title="Berserker Positional Weight"
                   />
                 </div>
                 <div className="flex justify-between text-[10px] text-slate-400 font-mono">
-                  <span>Berserker v0.9.0 ({(brnnueDualEval.phaseWeight.berserkerWeight * 100).toFixed(0)}%)</span>
-                  <span>PlentyChess ({(brnnueDualEval.phaseWeight.plentyChessWeight * 100).toFixed(0)}%)</span>
+                  <span>Berserker Attack ({(brnnueDualEval.phaseWeight.berserkerWeight * 100).toFixed(0)}%)</span>
+                  <span>Berserker Positional ({(brnnueDualEval.phaseWeight.plentyChessWeight * 100).toFixed(0)}%)</span>
                 </div>
               </div>
             </div>
@@ -564,7 +564,7 @@ export function BerserkerNnueInspector() {
                   <span className="text-xs font-normal text-slate-400 ml-2">({brnnueDualEval.centipawns} cp)</span>
                 </div>
                 <p className="text-xs text-slate-400 leading-relaxed">
-                  Dual Fusion: <strong>Berserker v0.9.0</strong> ({brnnueDualEval.berserker090.centipawns} cp) + <strong>PlentyChess</strong> ({brnnueDualEval.plentychess.centipawns} cp). Dynamic weighting based on game phase.
+                  Dual Fusion: <strong>Berserker Attack</strong> ({brnnueDualEval.berserker090.centipawns} cp) + <strong>Berserker Positional</strong> ({brnnueDualEval.plentychess.centipawns} cp). Dynamic weighting based on game phase.
                 </p>
               </div>
 
@@ -636,15 +636,15 @@ export function BerserkerNnueInspector() {
                 BRnnuev030 Dual NNUE Architecture
               </h2>
               <p className="text-xs text-slate-400 mt-1">
-                Mathematical and tensor specifications of the Dual NNUE evaluator (Berserker v0.9.0 + PlentyChess).
+                Mathematical and tensor specifications of the Dual Berserker NNUE evaluator.
               </p>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
-                <span className="text-xs font-bold text-purple-300 block">1. Berserker v0.9.0 Tactical Subnet</span>
+                <span className="text-xs font-bold text-purple-300 block">1. Berserker Attack Subnet</span>
                 <p className="text-xs text-slate-300 leading-relaxed">
-                  Jay Honnold's <strong>HalfKP-1024</strong> accumulator specializing in rapid king attacks, open-file rook penetrations, and dynamic piece mobility:
+                  Dedicated <strong>HalfKP-1024</strong> accumulator specializing in rapid king attacks, open-file rook penetrations, and dynamic piece mobility:
                 </p>
                 <div className="bg-slate-900 p-2.5 rounded font-mono text-xs text-purple-300 border border-slate-800">
                   {"A_Bsz[1024] = Σ W_feature(King, Piece, Square)"}
@@ -655,12 +655,12 @@ export function BerserkerNnueInspector() {
               </div>
 
               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
-                <span className="text-xs font-bold text-cyan-300 block">2. PlentyChess Positional Subnet</span>
+                <span className="text-xs font-bold text-cyan-300 block">2. Berserker Positional Subnet</span>
                 <p className="text-xs text-slate-300 leading-relaxed">
-                  Ankan Banerjee's <strong>HalfKAv2-1024</strong> accumulator dedicated to endgame pawn structure integrity, passed pawn valuation, and bishop pair coordination:
+                  Dedicated <strong>HalfKAv2-1024</strong> accumulator dedicated to endgame pawn structure integrity, passed pawn valuation, and bishop pair coordination:
                 </p>
                 <div className="bg-slate-900 p-2.5 rounded font-mono text-xs text-cyan-300 border border-slate-800">
-                  {"A_Plenty[1024] = Σ W_feature(King, Piece, Structure)"}
+                  {"A_BszPos[1024] = Σ W_feature(King, Piece, Structure)"}
                 </div>
                 <p className="text-[11px] text-slate-400">
                   Prevents positional drift and guarantees accurate conversion in technical endgames.
@@ -673,10 +673,10 @@ export function BerserkerNnueInspector() {
                   Adaptive phase interpolator across 24 game phase ticks ($T = 24$):
                 </p>
                 <div className="bg-slate-900 p-2.5 rounded font-mono text-xs text-amber-300 border border-slate-800">
-                  {"W_Bsz = Phase / 24   |   W_Plenty = (24 - Phase) / 24"}
+                  {"W_Attack = Phase / 24   |   W_Pos = (24 - Phase) / 24"}
                 </div>
                 <p className="text-[11px] text-slate-400">
-                  Gives 64% weight to Berserker 0.9.0 in the middlegame, smoothly shifting to 68% PlentyChess in endgames.
+                  Gives 64% weight to Berserker Attack in the middlegame, smoothly shifting to 68% Berserker Positional in endgames.
                 </p>
               </div>
 
@@ -758,7 +758,7 @@ export function BerserkerNnueInspector() {
 const CPP_BERSERKER_NNUE_KERNEL = `// ============================================================================
 // Berserker v0.3.0: Authentic BRnnuev030 Dual NNUE Evaluator Kernel
 // Author: Berserker Chess Engine Development Team
-// Architecture: Berserker v0.9.0 + PlentyChess Dual Fusion
+// Architecture: Berserker NNUE Dual Accumulator Fusion
 // SIMD Target: AVX2 / AVX-512 VNNI with Squared Clipped ReLU (SCReLU)
 // ============================================================================
 

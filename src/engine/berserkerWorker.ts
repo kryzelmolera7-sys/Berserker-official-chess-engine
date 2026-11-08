@@ -43,9 +43,9 @@ let isSearching = false;
 let stopRequested = false;
 
 let evalMode = 'brnnue-v030';
-let searchMode = 'Hybrid-MCTS-PVS'; // 'Hybrid-MCTS-PVS' | 'Pure-PVS' | 'Pure-MCTS'
-let threads = 4;
-let hashMb = 64;
+let searchMode = 'Pure-PVS'; // 'Pure-PVS' | 'Hybrid-MCTS-PVS' | 'Pure-MCTS'
+let threads = 64;
+let hashMb = 32768;
 let multiPv = 1;
 let tacticalContempt = 45;
 let kingAttackScale = 140;
@@ -755,11 +755,11 @@ self.onmessage = function (event) {
     case 'uci':
       self.postMessage(`id name ${ENGINE_NAME}`);
       self.postMessage(`id author ${ENGINE_AUTHOR}`);
-      self.postMessage('option name Threads type spin default 4 min 1 max 64');
-      self.postMessage('option name Hash type spin default 64 min 16 max 65536');
+      self.postMessage('option name Threads type spin default 64 min 1 max 64');
+      self.postMessage('option name Hash type spin default 32768 min 16 max 65536');
       self.postMessage('option name MultiPV type spin default 1 min 1 max 5');
       self.postMessage('option name EvalMode type combo default brnnue-v030 var brnnue-v030 var berserker-1.0-nnue var aura-nnue');
-      self.postMessage('option name SearchMode type combo default Hybrid-MCTS-PVS var Hybrid-MCTS-PVS var Pure-PVS var Pure-MCTS');
+      self.postMessage('option name SearchMode type combo default Pure-PVS var Pure-PVS var Hybrid-MCTS-PVS var Pure-MCTS');
       self.postMessage('option name TacticalContempt type spin default 45 min -100 max 100');
       self.postMessage('option name KingAttackScale type spin default 140 min 50 max 250');
       self.postMessage(`option name NNUE_Net type string default ${DEFAULT_NET}`);
@@ -858,9 +858,9 @@ self.onmessage = function (event) {
       self.postMessage(`=== ${ENGINE_NAME} NEURAL EVALUATION ===`);
       self.postMessage(`FEN: ${currentChess.fen()}`);
       self.postMessage(`Turn: ${currentChess.turn() === 'w' ? 'White' : 'Black'}`);
-      self.postMessage(`BRnnuev030 (Dual NNUE):     ${dualEval.centipawns > 0 ? '+' : ''}${(dualEval.centipawns / 100).toFixed(2)} (${dualEval.centipawns} cp)`);
-      self.postMessage(`  - Subnet 1 (Berserker v0.9.0): HalfKP-1024 King Attack Vectors (${dualEval.berserker090.centipawns} cp)`);
-      self.postMessage(`  - Subnet 2 (PlentyChess):     HalfKAv2-1024 Endgame Harmony (${dualEval.plentychess.centipawns} cp)`);
+      self.postMessage(`Berserker NNUE (Dual Subnets): ${dualEval.centipawns > 0 ? '+' : ''}${(dualEval.centipawns / 100).toFixed(2)} (${dualEval.centipawns} cp)`);
+      self.postMessage(`  - Subnet 1 (Berserker Attack): HalfKP-1024 King Attack Vectors (${dualEval.berserker090.centipawns} cp)`);
+      self.postMessage(`  - Subnet 2 (Berserker Positional): HalfKAv2-1024 Harmony (${dualEval.plentychess.centipawns} cp)`);
       self.postMessage(`Berserker 1.0 NNUE:          ${bsz10Eval.centipawns > 0 ? '+' : ''}${(bsz10Eval.centipawns / 100).toFixed(2)} (${bsz10Eval.centipawns} cp)`);
       self.postMessage(`Active Net:                  ${DEFAULT_NET}`);
       break;

@@ -88,9 +88,9 @@ export const useBerserkerEngine = (): UseBerserkerEngineReturn & {
   const [isReady, setIsReady] = useState<boolean>(false);
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const [engineConfig, setEngineConfig] = useState<BerserkerEngineConfig>({
-    threads: 4,
-    hashMb: 1024,
-    multiPv: 3,
+    threads: 64,
+    hashMb: 32768,
+    multiPv: 1,
     contempt: 45,
     kingAttackScale: 140,
     showWdl: true,
@@ -235,9 +235,10 @@ export const useBerserkerEngine = (): UseBerserkerEngineReturn & {
 
     // Configure Berserker UCI options
     worker.postMessage('uci');
-    worker.postMessage(`setoption name Threads value 4`);
-    worker.postMessage(`setoption name Hash value 1024`);
-    worker.postMessage(`setoption name MultiPV value 3`);
+    worker.postMessage(`setoption name Threads value 64`);
+    worker.postMessage(`setoption name Hash value 32768`);
+    worker.postMessage(`setoption name SearchMode value Pure-PVS`);
+    worker.postMessage(`setoption name MultiPV value 1`);
     worker.postMessage(`setoption name UCI_ShowWDL value true`);
     worker.postMessage('isready');
 
@@ -268,13 +269,13 @@ export const useBerserkerEngine = (): UseBerserkerEngineReturn & {
   }, [setOption]);
 
   const setHashSize = useCallback((mb: number) => {
-    const clamped = Math.max(16, Math.min(4096, mb));
+    const clamped = Math.max(16, Math.min(65536, mb));
     setEngineConfig((prev) => ({ ...prev, hashMb: clamped }));
     setOption('Hash', clamped);
   }, [setOption]);
 
   const setThreads = useCallback((threads: number) => {
-    const clamped = Math.max(1, Math.min(16, threads));
+    const clamped = Math.max(1, Math.min(64, threads));
     setEngineConfig((prev) => ({ ...prev, threads: clamped }));
     setOption('Threads', clamped);
   }, [setOption]);

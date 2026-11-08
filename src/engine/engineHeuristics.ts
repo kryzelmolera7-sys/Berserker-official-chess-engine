@@ -160,6 +160,54 @@ export const GM_OPENING_BOOK: Record<string, OpeningBookEntry> = {
     eco: 'C68'
   },
 
+  // 1. e4 e5 2. Nf3 Nc6 3. Bb5 -> Black 3... Nf6 (Berlin Defense)
+  'r1bqkb1r/pppp1ppp/2n2n2/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R w': {
+    san: 'O-O',
+    uci: 'e1g1',
+    openingName: 'Ruy Lopez: Berlin Defense (Main Line)',
+    eco: 'C65'
+  },
+
+  // 1. e4 e5 2. Nf3 Nc6 3. Bb5 Nf6 4. O-O -> Black 4... Nxe4 (Berlin Rio Variation)
+  'r1bqkb1r/pppp1ppp/2n2n2/1B2p3/4P3/5N2/PPPP1PPP/RNBQ1RK1 b': {
+    san: 'Nxe4',
+    uci: 'f6e4',
+    openingName: 'Ruy Lopez: Berlin Defense (Open Variation)',
+    eco: 'C67'
+  },
+
+  // 1. e4 e5 2. Nf3 Nc6 3. Bb5 Nf6 4. O-O Nxe4 -> White 5. d4
+  'r1bqkb1r/pppp1ppp/2n5/1B2p3/4n3/5N2/PPPP1PPP/RNBQ1RK1 w': {
+    san: 'd4',
+    uci: 'd2d4',
+    openingName: 'Ruy Lopez: Berlin Defense (5. d4 Main Line)',
+    eco: 'C67'
+  },
+
+  // 1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 -> White 4. Ba4 (Ruy Lopez Morphy Mainline)
+  'r1bqkbnr/1ppp1ppp/p1n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R w': {
+    san: 'Ba4',
+    uci: 'b5a4',
+    openingName: 'Ruy Lopez: Morphy Defense, Main Line (4. Ba4)',
+    eco: 'C70'
+  },
+
+  // 1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 -> Black 4... Nf6
+  'r1bqkbnr/1ppp1ppp/p1n5/4p3/B3P3/5N2/PPPP1PPP/RNBQK2R b': {
+    san: 'Nf6',
+    uci: 'g8f6',
+    openingName: 'Ruy Lopez: Closed Preparation (4... Nf6)',
+    eco: 'C78'
+  },
+
+  // 1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 -> White 5. O-O
+  'r1bqkb1r/1ppp1ppp/p1n2n2/4p3/B3P3/5N2/PPPP1PPP/RNBQK2R w': {
+    san: 'O-O',
+    uci: 'e1g1',
+    openingName: 'Ruy Lopez: Morphy Defense, 5. O-O Main Line',
+    eco: 'C80'
+  },
+
   // 1. e4 e6 (French Defense) -> White 2. d4
   'rnbqkbnr/pppp1ppp/4p3/8/4P3/8/PPPP1PPP/RNBQKBNR w': {
     san: 'd4',
