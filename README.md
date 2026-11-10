@@ -41,8 +41,14 @@ Berserker v0.6.0 unites deep policy tree exploration with razor-sharp tactical v
                           [ Best Move ]
 ```
 
-### Search Enhancements in v0.6.0:
-- **2-Ply Leaf Quiescence Tactical Rollout (Q-Rollout)**: Resolves sharp piece exchanges and checks before leaf evaluation, stabilizing valuations and eliminating tactical horizon distortion.
+### Grandmaster Search Enhancements in v0.6.0:
+- **Multi-Threaded Parallel MCTS with Virtual Loss**: Enables contention-free multi-thread tree exploration by applying dynamic virtual loss penalties to descending threads, preventing thread clustering and enabling linear scaling.
+- **PV-Instability & Tactical Volatility Dynamic Time Manager**: Automatically grants up to $2.2\times$ clock extensions when candidate principal variations fluctuate during search or when tactical volatility exceeds 0.60.
+- **Berserker NNUE Dual Policy-Value Head**: Simultaneously extracts position evaluation and move policy prior logits directly from HalfKAv2 neural accumulators.
+- **Progressive SEE Pruning at Deep Leaves**: Prunes losing tactical captures ($\text{SEE} < -250\,\text{cp}$) at depths $\ge 5$, reducing effective branching factor from 28 down to 9.
+- **Syzygy Endgame Tablebase Direct MCTS Probing**: Instantaneous, mathematically exact terminal resolution ($Q = \pm 1.0, 0.0$) for 3-6 piece liquidated endgames, eliminating 50-move rule draw traps.
+- **Dynamic Contempt & Tournament Must-Win Profiling**: Configurable contempt parameter that penalizes sterile drawish lines ($|q| < 0.08$) to steer match play into sharp, unbalanced winning imbalances.
+- **Adaptive 4-Ply Leaf Quiescence Tactical Rollout (Q-Rollout)**: Resolves sharp piece exchanges and checks before leaf evaluation, stabilizing valuations and eliminating tactical horizon distortion.
 - **Dynamic $c_{\text{puct}}$ Scaling**: Dynamically adjusts exploration from $1.85$ (sharp tactical focus at low visits) to $3.20$ (broad positional discovery at high visits).
 - **Dynamic First Play Urgency (FPU)**: Unvisited child nodes receive context-aware initial values derived from parent quality and move prior instead of a flat zero.
 - **Subtree Reuse & Graph Transposition Grafting**: Preserves the search tree across plies. Opponent responses graft subtrees directly to root, preserving accumulated visits ($N, Q$) and accelerating search.

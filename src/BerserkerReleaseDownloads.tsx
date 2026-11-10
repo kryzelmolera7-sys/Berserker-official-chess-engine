@@ -361,16 +361,16 @@ const DOWNLOAD_ITEMS: DownloadItem[] = [
   // Standalone Universal CLI Engine
   {
     id: 'cli-standalone',
-    name: 'Berserker v0.4.0 Universal UCI Engine',
-    fileName: 'berserker-v0.4.0-cli.js',
+    name: 'Berserker v0.6.0 Universal UCI Engine',
+    fileName: 'berserker-v0.6.0-cli.js',
     category: 'windows',
-    size: '46.0 KB',
+    size: '51.6 KB',
     type: 'Universal Runtime (JS / Node / Bun)',
-    description: 'Grandmaster core with Hybrid MCTS-PVS Dual Arbiter, 2-Ply Leaf Q-Rollout, Dynamic c_puct Scaling, Dynamic FPU, Subtree Reuse, and Continuous Bayesian Soft Arbitration. Runs identically on Windows, Linux, macOS, and Android.',
-    sha256: '76c2f7d76fdb4cad63b33af5baebfc3a16bff56714c925bd588c9e0e5aafc53f',
-    downloadUrl: '/downloads/berserker-v0.4.0-cli.js',
+    description: 'Grandmaster core with Threat-Space Prophylaxis (The Petrosian Patch), Virtual Loss Parallel MCTS, Dynamic Time Manager, Berserker NNUE Dual Policy-Value Head, Progressive SEE Pruning, Syzygy Tablebase Probing, and Dynamic Contempt Profiling. Runs identically on Windows, Linux, macOS, and Android.',
+    sha256: 'c834730fa053de415bdd3b0a7172a861b016e821d5e2192c885bc4de099b0fe2',
+    downloadUrl: '/downloads/berserker-v0.6.0-cli.js',
     recommendedFor: 'All Operating Systems (Universal)',
-    badge: 'Enhanced MCTS+PVS'
+    badge: 'v0.6.0 Grandmaster Core'
   }
 ];
 

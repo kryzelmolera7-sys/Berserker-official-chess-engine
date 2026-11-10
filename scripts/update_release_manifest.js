@@ -29,14 +29,21 @@ const items = files.map(file => {
 items.sort((a, b) => a.fileName.localeCompare(b.fileName));
 
 const manifest = {
-  release: "Berserker v0.4.0",
-  version: "0.4.0",
+  release: "Berserker v0.6.0",
+  version: "0.6.0",
   author: "Berserker Engine Team",
-  date: "2026-11-06",
+  date: "2026-11-09",
   status: "Official Stable Multi-Platform Release",
   features: [
     "Hybrid MCTS-PVS Dual Arbiter (PUCT Policy Guidance + Tactical Safety Net)",
-    "2-Ply Leaf Quiescence Tactical Rollout (Q-Rollout) for Mid-Tactic Stabilization",
+    "Threat-Space Prophylaxis (The Petrosian Patch - Preemptive Opponent Threat Denial)",
+    "Multi-Threaded Parallel MCTS with Virtual Loss",
+    "PV-Instability & Tactical Volatility Dynamic Time Manager",
+    "Berserker NNUE Dual Policy-Value Head (HalfKAv2 Logits)",
+    "Progressive SEE Pruning at Deep MCTS Tree Leaves (Depth >= 5)",
+    "Syzygy Endgame Tablebase Direct MCTS Probing (3-6 Man Exact Resolutions)",
+    "Dynamic Contempt & Tournament Must-Win Profiling",
+    "Adaptive 4-Ply Leaf Quiescence Tactical Rollout (Q-Rollout)",
     "Dynamic Entropy-Driven c_puct Scaling & First Play Urgency (FPU)",
     "Subtree Reuse & Graph Transposition Grafting across Consecutive Turns",
     "Continuous Bayesian Dual Arbiter with Tactical Volatility Weighting",

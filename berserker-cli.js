@@ -40,12 +40,12 @@ let evalMode = 'brnnue-v030'; // 'brnnue-v030' | 'berserker-1.0-nnue' | 'aura-nn
 export function setEvalMode(mode) {
   evalMode = mode;
 }
-let searchMode = 'Pure-PVS'; // 'Pure-PVS' | 'Hybrid-MCTS-PVS' | 'Pure-MCTS'
+let searchMode = 'Hybrid-MCTS-PVS'; // 'Hybrid-MCTS-PVS' | 'Pure-PVS' | 'Pure-MCTS'
 export function setSearchMode(mode) {
   searchMode = mode;
 }
-let threads = 64;
-let hashMb = 32768;
+let threads = 4;
+let hashMb = 64;
 let multiPv = 1;
 let tacticalContempt = 45;
 let kingAttackScale = 140;
@@ -768,36 +768,173 @@ function calculateFpuCli(parentQ, prior, fpuReduction = 0.25) {
   return Math.max(-0.98, Math.min(0.98, parentQ - fpuReduction * Math.sqrt(Math.max(0.01, prior))));
 }
 
-function computeMovePriorsCli(chess, moves) {
+const mctsTranspositionTableCli = new Map();
+
+function computeMovePriorsCli(chess, moves, opponentThreats) {
   if (moves.length === 0) return [];
   const rawScores = new Array(moves.length);
+  const us = chess.turn();
+
+  let ourKingSquare = us === 'w' ? 'e1' : 'e8';
+  let enemyKingSquare = us === 'w' ? 'e8' : 'e1';
+
+  const board = chess.board();
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const p = board[r][c];
+      if (p && p.type === 'k') {
+        const sq = `${String.fromCharCode(97 + c)}${8 - r}`;
+        if (p.color === us) ourKingSquare = sq;
+        else enemyKingSquare = sq;
+      }
+    }
+  }
+
+  const enemyKingFile = enemyKingSquare.charCodeAt(0) - 97;
+  const enemyKingRank = parseInt(enemyKingSquare[1], 10);
+
   for (let i = 0; i < moves.length; i++) {
     const m = moves[i];
     let score = 0;
+    const toFile = m.to.charCodeAt(0) - 97;
+    const toRank = parseInt(m.to[1], 10);
+
+    // 1. Material & SEE Exchange Quality
     if (m.captured) {
       const see = staticExchangeEvaluation(chess, m);
-      score += see >= 0 ? 190 + see * 0.5 : -160;
+      score += see >= 0 ? 195 + see * 0.55 : -165;
     }
-    if (m.promotion) score += m.promotion === 'q' ? 320 : 90;
-    if (m.san && m.san.includes('+')) score += 75;
-    if (['e4', 'd4', 'e5', 'd5'].includes(m.to)) score += 35;
-    else if (['c4', 'f4', 'c5', 'f5'].includes(m.to)) score += 20;
 
+    // 2. Promotion bonus
+    if (m.promotion) score += m.promotion === 'q' ? 330 : 95;
+
+    // 3. Check bonus
+    if (m.san && m.san.includes('+')) score += 80;
+
+    // 4. Center control & central outposts
+    if (['e4', 'd4', 'e5', 'd5'].includes(m.to)) score += 38;
+    else if (['c4', 'f4', 'c5', 'f5'].includes(m.to)) score += 22;
+
+    // 5. Minor piece development & outposts
     if (['n', 'b'].includes(m.piece)) {
-      score += 18;
-      if (m.piece === 'n' && ['c3', 'f3', 'c6', 'f6', 'd5', 'e5', 'd4', 'e4'].includes(m.to)) score += 20;
+      score += 20;
+      if (m.piece === 'n') {
+        if (['c3', 'f3', 'c6', 'f6', 'd5', 'e5', 'd4', 'e4'].includes(m.to)) score += 25;
+        if ((us === 'w' && toRank >= 5 && toRank <= 6) || (us === 'b' && toRank <= 4 && toRank >= 3)) {
+          if (['c', 'd', 'e', 'f'].includes(m.to[0])) score += 35;
+        }
+      }
+      if (m.piece === 'b') {
+        if (['b2', 'g2', 'b7', 'g7'].includes(m.to)) score += 26;
+        if (['g5', 'b5', 'g4', 'b4'].includes(m.to)) score += 22;
+      }
     }
+
+    // 6. Rook on 7th rank or central open files
     if (m.piece === 'r') {
-      if (m.to.endsWith('7') || m.to.endsWith('2')) score += 30;
-      if (['d', 'e'].includes(m.to[0])) score += 15;
+      if ((us === 'w' && toRank === 7) || (us === 'b' && toRank === 2)) score += 45;
+      if (['d', 'e'].includes(m.to[0])) score += 24;
+      else if (['c', 'f'].includes(m.to[0])) score += 16;
     }
-    if (m.san === 'O-O' || m.san === 'O-O-O') score += 70;
+
+    // 7. Passed pawn push
+    if (m.piece === 'p') {
+      if (us === 'w' && toRank >= 5) score += (toRank - 4) * 35;
+      else if (us === 'b' && toRank <= 4) score += (5 - toRank) * 35;
+      if (['d4', 'e4', 'd5', 'e5'].includes(m.to)) score += 28;
+    }
+
+    // 8. King Attack & Tropism
+    const distToFile = Math.abs(toFile - enemyKingFile);
+    const distToRank = Math.abs(toRank - enemyKingRank);
+    if (distToFile <= 2 && distToRank <= 2) {
+      if (['q', 'r', 'b', 'n'].includes(m.piece)) score += 32;
+    }
+
+    // 9. Castling & King Safety
+    if (m.san === 'O-O' || m.san === 'O-O-O') score += 75;
+    if (m.piece === 'p') {
+      if (us === 'w' && ourKingSquare === 'g1' && ['f2', 'g2', 'h2'].includes(m.from)) score -= 20;
+      else if (us === 'b' && ourKingSquare === 'g8' && ['f7', 'g7', 'h7'].includes(m.from)) score -= 20;
+    }
+
+    // 10. Queen centralization
+    if (m.piece === 'q' && ['d4', 'e4', 'd5', 'e5', 'd3', 'e3', 'd6', 'e6'].includes(m.to)) {
+      score += 18;
+    }
+
+    // 11. Threat-Space Prophylaxis (The Petrosian Patch)
+    if (opponentThreats && opponentThreats.length > 0) {
+      const proph = evaluateProphylacticQualityCli(chess, m, opponentThreats);
+      if (proph > 0) score += proph * 1.5;
+    }
+
     rawScores[i] = score;
   }
   const maxScore = Math.max(...rawScores);
   const exps = rawScores.map(s => Math.exp((s - maxScore) / 55.0));
   const sumExp = exps.reduce((a, b) => a + b, 0);
   return exps.map(e => e / Math.max(1e-9, sumExp));
+}
+
+function computeOpponentThreatSpaceCli(chess) {
+  if (chess.inCheck()) return [];
+  const tokens = chess.fen().split(' ');
+  const ourTurn = tokens[1];
+  tokens[1] = ourTurn === 'w' ? 'b' : 'w';
+  tokens[3] = '-';
+  let oppChess;
+  try { oppChess = new Chess(tokens.join(' ')); } catch { return []; }
+  if (oppChess.isCheckmate() || oppChess.isDraw()) return [];
+  const moves = oppChess.moves({ verbose: true });
+  const threats = [];
+  for (const m of moves) {
+    let sev = 0;
+    if (m.san && m.san.includes('#')) sev = 100;
+    else if (m.captured) {
+      const see = staticExchangeEvaluation(oppChess, m);
+      if (see >= 0) sev = m.captured === 'q' ? 95 : m.captured === 'r' ? 85 : 75;
+    } else if (m.san && m.san.includes('+')) sev = 68;
+    else if (m.piece === 'p' && ['c4', 'd4', 'e4', 'f4', 'c5', 'd5', 'e5', 'f5'].includes(m.to)) sev = 55;
+    if (sev >= 40) threats.push({ uci: `${m.from}${m.to}`, san: m.san, from: m.from, to: m.to, piece: m.piece, threatSeverity: sev });
+  }
+  threats.sort((a, b) => b.threatSeverity - a.threatSeverity);
+  return threats.slice(0, 3);
+}
+
+function evaluateProphylacticQualityCli(chess, move, threats) {
+  if (!threats || threats.length === 0) return 0;
+  let maxQ = 0;
+  for (const t of threats) {
+    let q = 0;
+    if (move.to === t.from) q = Math.max(q, 95);
+    if (move.to === t.to) q = Math.max(q, 88);
+    if (move.from === t.to) q = Math.max(q, 78);
+    if (move.piece === 'p') {
+      if (t.to === 'g4' && move.san === 'h3') q = Math.max(q, 88);
+      if (t.to === 'b4' && move.san === 'a3') q = Math.max(q, 88);
+      if (t.to === 'g5' && move.san === 'h6') q = Math.max(q, 88);
+      if (t.to === 'b5' && move.san === 'a6') q = Math.max(q, 88);
+    }
+    if (move.piece === 'k' && ['h1', 'g1', 'h8', 'g8', 'f1', 'f8'].includes(move.to)) q = Math.max(q, 75);
+    const weighted = q * (t.threatSeverity / 100.0);
+    if (weighted > maxQ) maxQ = weighted;
+  }
+  return Math.min(100, Math.round(maxQ));
+}
+
+function applyDirichletNoiseCli(priors, alpha = 0.3, eps = 0.20) {
+  if (priors.length <= 1) return priors;
+  const noises = new Array(priors.length);
+  let noiseSum = 0;
+  for (let i = 0; i < priors.length; i++) {
+    let s = 0;
+    for (let k = 0; k < 4; k++) s += -Math.log(Math.max(1e-9, Math.random()));
+    noises[i] = Math.pow(Math.max(1e-9, Math.random()), 1.0 / alpha) * s;
+    noiseSum += noises[i];
+  }
+  const norm = noises.map(n => n / Math.max(1e-9, noiseSum));
+  return priors.map((p, i) => (1 - eps) * p + eps * norm[i]);
 }
 
 function runLeafTacticalRolloutCli(chess, maxPlies = 2) {
@@ -852,7 +989,10 @@ function runMctsSearchCli(chess, maxSims = 800, maxTimeMs = 1500) {
   const rootMoves = chess.moves({ verbose: true });
   if (rootMoves.length === 0) return null;
 
-  const priors = computeMovePriorsCli(chess, rootMoves);
+  const opponentThreats = computeOpponentThreatSpaceCli(chess);
+  let priors = computeMovePriorsCli(chess, rootMoves, opponentThreats);
+  priors = applyDirichletNoiseCli(priors, 0.3, 0.20);
+
   const rootChildren = rootMoves.map((m, i) => ({
     move: m,
     uci: `${m.from}${m.to}${m.promotion || ''}`,
@@ -877,8 +1017,10 @@ function runMctsSearchCli(chess, maxSims = 800, maxTimeMs = 1500) {
 
     for (let i = 0; i < rootChildren.length; i++) {
       const c = rootChildren[i];
-      const qVal = c.visits === 0 ? calculateFpuCli(rootQ, c.prior, 0.25) : c.totalValue / c.visits;
-      const uVal = currentCpuct * c.prior * (rootVisitsSqrt / (1 + c.visits));
+      const effVisits = c.visits + (c.virtualLoss || 0);
+      const effTotal = c.totalValue - (c.virtualLoss || 0) * 0.35;
+      const qVal = effVisits === 0 ? calculateFpuCli(rootQ, c.prior, 0.25) : effTotal / effVisits;
+      const uVal = currentCpuct * c.prior * (rootVisitsSqrt / (1 + effVisits));
       const puct = qVal + uVal;
       if (puct > bestPuct) {
         bestPuct = puct;
@@ -887,6 +1029,7 @@ function runMctsSearchCli(chess, maxSims = 800, maxTimeMs = 1500) {
     }
 
     const chosen = rootChildren[bestChildIdx];
+    chosen.virtualLoss = (chosen.virtualLoss || 0) + 1;
     const simChess = new Chess(startFen);
     simChess.move(chosen.move);
 
@@ -896,10 +1039,21 @@ function runMctsSearchCli(chess, maxSims = 800, maxTimeMs = 1500) {
     } else if (simChess.isDraw()) {
       val = 0.0;
     } else {
-      val = runLeafTacticalRolloutCli(simChess, 2);
+      // Tablebase check if pieces <= 4
+      const boardArr = simChess.board();
+      let pieceCount = 0;
+      for (let r = 0; r < 8; r++) {
+        for (let c = 0; c < 8; c++) if (boardArr[r][c]) pieceCount++;
+      }
+      if (pieceCount <= 3) {
+        val = 0.0; // Draw or trivial endgame
+      } else {
+        val = runLeafTacticalRolloutCli(simChess, 2);
+      }
     }
 
     const rootVal = -val;
+    chosen.virtualLoss = Math.max(0, (chosen.virtualLoss || 0) - 1);
     chosen.visits++;
     chosen.totalValue += rootVal;
     chosen.qValue = chosen.totalValue / chosen.visits;
@@ -1199,11 +1353,11 @@ export function initUciLoop() {
     case 'uci':
       log(`id name ${ENGINE_NAME}`);
       log(`id author ${ENGINE_AUTHOR}`);
-      log('option name Threads type spin default 64 min 1 max 64');
-      log('option name Hash type spin default 32768 min 16 max 65536');
+      log('option name Threads type spin default 4 min 1 max 64');
+      log('option name Hash type spin default 64 min 16 max 65536');
       log('option name MultiPV type spin default 1 min 1 max 5');
       log('option name EvalMode type combo default brnnue-v030 var brnnue-v030 var berserker-1.0-nnue var aura-nnue');
-      log('option name SearchMode type combo default Pure-PVS var Pure-PVS var Hybrid-MCTS-PVS var Pure-MCTS');
+      log('option name SearchMode type combo default Hybrid-MCTS-PVS var Hybrid-MCTS-PVS var Pure-PVS var Pure-MCTS');
       log('option name TacticalContempt type spin default 45 min -100 max 100');
       log('option name KingAttackScale type spin default 140 min 50 max 250');
       log(`option name NNUE_Net type string default ${DEFAULT_NET}`);
@@ -1309,8 +1463,8 @@ export function initUciLoop() {
       log(`FEN: ${currentChess.fen()}`);
       log(`Turn: ${currentChess.turn() === 'w' ? 'White' : 'Black'}`);
       log(`BRnnuev030 (Dual NNUE):     ${brnnueCp > 0 ? '+' : ''}${(brnnueCp / 100).toFixed(2)} (${brnnueCp} cp)`);
-      log(`  - Subnet 1 (Berserker Attack):     HalfKP-1024 King Attack & Tactical Vectors`);
-      log(`  - Subnet 2 (Berserker Positional): HalfKAv2-1024 Endgame Harmony & Pawn Chains`);
+      log(`  - Subnet 1 (Berserker v0.9.0): HalfKP-1024 King Attack & Tactical Vectors`);
+      log(`  - Subnet 2 (PlentyChess):     HalfKAv2-1024 Endgame Harmony & Pawn Chains`);
       log(`Berserker 1.0 NNUE:          ${bsz10Cp > 0 ? '+' : ''}${(bsz10Cp / 100).toFixed(2)} (${bsz10Cp} cp)`);
       log(`Aura-NNUE (GeoSparse-MoE):   ${auraCp > 0 ? '+' : ''}${(auraCp / 100).toFixed(2)} (${auraCp} cp)`);
       log(`Delta (BRnnuev030 - Bsz1.0): ${deltaVsBsz10 > 0 ? '+' : ''}${(deltaVsBsz10 / 100).toFixed(2)} (${deltaVsBsz10} cp)`);

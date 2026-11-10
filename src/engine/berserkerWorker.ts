@@ -821,8 +821,9 @@ self.onmessage = function (event) {
         });
 
         const topMovesStr = hybridRes.mctsTopMoves.map(m => `${m.uci}(${m.visits}v,${m.qValue}q)`).join(' ');
+        const threatsStr = hybridRes.activeOpponentThreats.map(t => `${t.san}:${t.threatSeverity}`).join(' ');
         self.postMessage(
-          `info depth ${hybridRes.pvsDepth} score cp ${hybridRes.scoreCp} visits ${hybridRes.mctsVisits} sims ${hybridRes.totalSimulations} arbiter ${hybridRes.decisionReason} volatility ${hybridRes.tacticalVolatility} reused ${hybridRes.treeReused} delta ${hybridRes.safetyNetDeltaCp} time ${hybridRes.timeMs} top [${topMovesStr}] pv ${hybridRes.bestMoveUci}`
+          `info depth ${hybridRes.pvsDepth} score cp ${hybridRes.scoreCp} visits ${hybridRes.mctsVisits} sims ${hybridRes.totalSimulations} arbiter ${hybridRes.decisionReason} proph ${hybridRes.prophylaxisScore} threats [${threatsStr}] volatility ${hybridRes.tacticalVolatility} reused ${hybridRes.treeReused} tb ${hybridRes.tablebaseHits} ext ${hybridRes.timeExtensionsGranted} delta ${hybridRes.safetyNetDeltaCp} time ${hybridRes.timeMs} top [${topMovesStr}] pv ${hybridRes.bestMoveUci}`
         );
         self.postMessage(`bestmove ${hybridRes.bestMoveUci}`);
       } else {
