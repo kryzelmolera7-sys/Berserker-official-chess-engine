@@ -759,7 +759,7 @@ function executeRootSearch(targetDepth = 12, maxTimeMs = 3000) {
 
           currentChess.move(m);
           const subPv: string[] = [];
-          const s = -pvsSearch(currentChess, Math.max(1, currentDepth - 1), 1, -30000, 30000, stats, subPv, startTime, maxTimeMs, null, m);
+          const s = -pvsSearch(currentChess, Math.max(1, currentDepth - 1), 1, -30000, 30000, stats, subPv, startTime, maxTimeMs, null, uci);
           currentChess.undo();
 
           if (s > altScore) {

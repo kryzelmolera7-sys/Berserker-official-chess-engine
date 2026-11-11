@@ -16,7 +16,8 @@ import {
 import { useBerserkerEngine } from './useBerserkerEngine';
 import { evaluateAuraNnue } from './engine/auraNnue';
 import { evaluateBerserkerNnue } from './engine/berserkerNnue';
-import { evaluateBRnnueV030, evaluateBerserker10Nnue } from './engine/brnnueDualEval';
+import { evaluateBRnnueV030, evaluateBRnnueV070, evaluateBerserker10Nnue } from './engine/brnnueDualEval';
+import { getChess960PositionInfo, getRandomChess960Index } from './engine/chess960';
 
 export const UciEngineConsole: React.FC = () => {
   const {
@@ -276,6 +277,28 @@ export const UciEngineConsole: React.FC = () => {
             className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 transition"
           >
             position startpos
+          </button>
+          <button
+            onClick={() => {
+              const sp = getRandomChess960Index();
+              const info = getChess960PositionInfo(sp);
+              handleSend('setoption name UCI_Chess960 value true');
+              handleSend(`position fen ${info.fen}`);
+              setLocalLogs((p) => [...p, `[Chess960] Loaded SP ${sp}: [${info.backrank}] - ${info.fen}`]);
+            }}
+            className="px-2.5 py-1 rounded bg-amber-950 hover:bg-amber-900 text-amber-300 border border-amber-800 transition font-bold"
+          >
+            🎲 Chess960 Random
+          </button>
+          <button
+            onClick={() => {
+              setMultiPv(3);
+              setOption('MultiPV', 3);
+              setLocalLogs((p) => [...p, '[UCI] MultiPV set to 3 candidate lines']);
+            }}
+            className="px-2.5 py-1 rounded bg-purple-950 hover:bg-purple-900 text-purple-300 border border-purple-800 transition text-xs font-semibold"
+          >
+            MultiPV: 3
           </button>
           <button
             onClick={() => handleSend('go depth 15')}

@@ -776,6 +776,19 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
           }
         }
       }
+
+      // Chess960 Castling resolution for engine moves
+      if (!chosenMove && isChess960 && chess960Info) {
+        const testUci = wasmMove || '';
+        if (testUci) {
+          const resolved = resolveChess960Move(chess, testUci, chess960Info.castlingConfig);
+          if (resolved.isChess960Castling && resolved.side) {
+            executeChess960Castling(chess, resolved.side, chess960Info.castlingConfig);
+            const castlingSan = resolved.side === 'kingside' ? 'O-O' : 'O-O-O';
+            chosenMove = { san: castlingSan, from: testUci.slice(0, 2), to: testUci.slice(2, 4) } as any;
+          }
+        }
+      }
     }
 
     // Ultimate fallback to guarantee game continues
@@ -1177,6 +1190,36 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
               <Terminal className="w-3.5 h-3.5" />
               {showConsole ? 'Hide Console' : 'UCI Console'}
             </button>
+
+            {/* Chess960 Mode Toggle & Controls */}
+            <button
+              onClick={() => {
+                if (!isChess960) {
+                  handleStartChess960(518);
+                } else {
+                  handleStandardChessReset();
+                }
+              }}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border ${
+                isChess960 
+                  ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-md font-extrabold' 
+                  : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
+              }`}
+              title="Toggle Chess960 (Fischer Random Chess)"
+            >
+              <Shuffle className="w-3.5 h-3.5" />
+              {isChess960 ? `Chess960 (SP ${chess960SpIndex})` : 'Chess960'}
+            </button>
+
+            {isChess960 && (
+              <button
+                onClick={() => handleStartChess960()}
+                className="px-2.5 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 text-xs font-semibold flex items-center gap-1"
+                title="Generate Random Chess960 Starting Position"
+              >
+                🎲 Random SP
+              </button>
+            )}
 
             {/* New Game Button */}
             <button

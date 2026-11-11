@@ -401,8 +401,10 @@ export function executeChess960Castling(
   board[rank][rookCol] = null;
 
   // Place at destination
-  board[rank][destKingCol] = { type: 'k', color: turn };
-  board[rank][destRookCol] = { type: 'r', color: turn };
+  const kingDestSq = `${String.fromCharCode(97 + destKingCol)}${turn === 'w' ? 1 : 8}` as any;
+  const rookDestSq = `${String.fromCharCode(97 + destRookCol)}${turn === 'w' ? 1 : 8}` as any;
+  board[rank][destKingCol] = { square: kingDestSq, type: 'k', color: turn };
+  board[rank][destRookCol] = { square: rookDestSq, type: 'r', color: turn };
 
   // Rebuild placement string
   const rows: string[] = [];
