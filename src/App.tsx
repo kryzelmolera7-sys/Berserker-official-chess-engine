@@ -66,14 +66,14 @@ export default function App() {
                 <span>Berserker</span>
               </h1>
               <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/40 font-bold uppercase">
-                v0.4.0 Official
+                v0.7.0 Dev
               </span>
               <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-bold hidden sm:inline-block">
-                +570 Elo (Official)
+                Quad-Head NNUE & MCTS-DAG
               </span>
             </div>
             <p className="text-[11px] text-slate-400">
-              Standalone UCI Engine • BRnnue Dual Architecture & Aura-NNUE (GeoSparse-MoE)
+              Neural MCTS-DAG & Threat-Space Prophylaxis II • BRnnue Quad-Head Architecture • Bayesian Arbiter
             </p>
           </div>
         </div>
@@ -89,7 +89,7 @@ export default function App() {
             }`}
           >
             <Download className="w-3.5 h-3.5" />
-            <span>v0.4.0 Downloads</span>
+            <span>v0.7.0 Downloads</span>
           </button>
 
           <button
@@ -214,7 +214,7 @@ export default function App() {
 
       {/* Clean Footer */}
       <footer className="border-t border-slate-900 bg-slate-950/80 px-4 lg:px-8 py-3 text-center text-xs text-slate-500">
-        Berserker v0.6.0 Official Release • Battle-Hardened Pure-PVS Alpha-Beta & Berserker NNUE • 64 Threads • 32GB Hash
+        Berserker v0.7.0-dev Official Release • Neural MCTS-DAG & Threat-Space Prophylaxis II • BRnnue Quad-Head NNUE • 64 Threads • 32GB Hash
       </footer>
     </div>
   );

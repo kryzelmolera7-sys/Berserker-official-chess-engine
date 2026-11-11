@@ -17,7 +17,7 @@
 
 import { Chess, Move } from 'chess.js';
 import { evaluateBerserkerNnue, BerserkerNnueEval } from './berserkerNnue';
-import { evaluateBRnnueV030, BRnnueV030Eval } from './brnnueDualEval';
+import { evaluateBRnnueV070, BRnnueV070QuadEval } from './brnnueDualEval';
 
 export type SearchNodeType = 'EXACT' | 'LOWERBOUND' | 'UPPERBOUND';
 
@@ -28,6 +28,14 @@ export interface TTEntry {
   flag: SearchNodeType;
   bestMoveSan: string;
   bestMoveUci: string;
+}
+
+export interface MultiPvCandidateLine {
+  rank: number;
+  scoreCp: number;
+  bestMoveSan: string;
+  bestMoveUci: string;
+  pv: string[];
 }
 
 export interface SearchStatistics {
@@ -43,6 +51,7 @@ export interface SearchStatistics {
   pv: string[];
   evalDetails: BerserkerNnueEval;
   ttHits: number;
+  multiPvLines?: MultiPvCandidateLine[];
 }
 
 // MVV-LVA Table: [Victim][Attacker]
@@ -78,6 +87,9 @@ const captureHistoryTable = new Int32Array(2 * 64 * 64);
 
 // Killer Moves Table: [depth 0-64][slot 0-1]
 const killerMoves: (string | null)[][] = Array.from({ length: 64 }, () => [null, null]);
+
+// Static Evaluation Stack for Improving Heuristic [ply 0-127]
+const staticEvalStack: number[] = new Array(128).fill(0);
 
 // Simple In-Memory Transposition Table (50,000 entries max for web runtime)
 const transpositionTable = new Map<string, TTEntry>();
@@ -233,8 +245,8 @@ function quiescenceSearch(
 ): number {
   stats.qnodes++;
 
-  // Stand-Pat Evaluation using Berserker v0.3.0 BRnnuev030 Dual NNUE
-  const evalResult = evaluateBRnnueV030(chess.fen());
+  // Stand-Pat Evaluation using Berserker v0.7.0 BRnnuev070 Quad NNUE + Squeeze Matrix
+  const evalResult = evaluateBRnnueV070(chess.fen());
   const standPat = evalResult.evalCpPerspective;
 
   if (qdepth >= maxQdepth) {
@@ -356,11 +368,12 @@ function pvsSearch(
   // Static evaluation with Correction History (CorrHist) and Fifty-Move Decay
   let rawStaticEval = 0;
   let staticEval = 0;
+  let improving = false;
   const turn = chess.turn();
   const colorIdx = turn === 'w' ? 0 : 1;
 
   if (!inCheck) {
-    rawStaticEval = evaluateBRnnueV030(chess.fen()).evalCpPerspective;
+    rawStaticEval = evaluateBRnnueV070(chess.fen()).evalCpPerspective;
     const board = chess.board();
     const pKey = computePawnKey(board);
     const npKey = computeNonPawnKey(board);
@@ -371,13 +384,28 @@ function pvsSearch(
     staticEval = Math.max(-25000, Math.min(25000, rawStaticEval + corrAdjustment));
     // Anti-shuffle decay: forces decisive pawn conversions instead of drifting to 50-move draw
     staticEval = applyFiftyMoveDecay(staticEval, chess.fen());
+    if (ply < 128) {
+      staticEvalStack[ply] = staticEval;
+      improving = ply >= 2 && staticEval > staticEvalStack[ply - 2];
+    }
   }
 
-  // 1. Reverse Futility Pruning (RFP / Static Null Move Pruning)
+  // 1. Reverse Futility Pruning (RFP / Static Null Move Pruning) with Improving Heuristic
   if (depth <= 6 && !inCheck && !isRoot && Math.abs(beta) < 9000) {
-    const rfpMargin = depth * 75;
+    const rfpMargin = depth * (improving ? 85 : 65);
     if (staticEval - rfpMargin >= beta) {
       return staticEval;
+    }
+  }
+
+  // 1b. Razoring (Depth 1-3): If static eval is hopelessly below alpha, verify with Q-Search
+  if (depth <= 3 && !inCheck && !isRoot && Math.abs(alpha) < 9000) {
+    const razorMargin = 380 + depth * 110;
+    if (staticEval + razorMargin <= alpha) {
+      const qScore = quiescenceSearch(chess, alpha, alpha + 1, 0, 4, stats);
+      if (qScore <= alpha) {
+        return qScore;
+      }
     }
   }
 
@@ -514,14 +542,22 @@ function pvsSearch(
     let score: number;
     const subPv: string[] = [];
 
-    // Principal Variation Search logic:
+    // Principal Variation Search logic with Singular & Passed Pawn Extensions:
+    let moveExtension = singularExtension;
+    // 7th Rank Passed Pawn Push Extension (+1 ply for imminent promotion)
+    if (move.piece === 'p' && ((turn === 'w' && move.to[1] === '7') || (turn === 'b' && move.to[1] === '2'))) {
+      moveExtension = Math.max(moveExtension, 1);
+    }
+
     if (movesSearched === 1) {
-      score = -pvsSearch(chess, depth - 1 + singularExtension, ply + 1, -beta, -alpha, stats, subPv, move);
+      score = -pvsSearch(chess, depth - 1 + moveExtension, ply + 1, -beta, -alpha, stats, subPv, move);
     } else {
-      // Dynamic Late Move Reductions (LMR) with History Dampening & Check Immunity
+      // Dynamic Late Move Reductions (LMR) with History Dampening, Check Immunity & Improving Heuristic
       let reduction = 0;
       if (depth >= 3 && movesSearched >= 3 && !move.captured && !move.promotion && !inCheck) {
         reduction = 1 + Math.floor(Math.log(depth) * Math.log(movesSearched) / 2.1);
+        if (improving) reduction -= 1;
+        else reduction += 1;
 
         // History Dampening: High history moves are less reduced
         const fromIdx = squareToIdx(move.from);
@@ -650,7 +686,8 @@ function pvsSearch(
 export function searchIndependentBerserker(
   fen: string,
   maxDepth: number = 5,
-  timeLimitMs: number = 800
+  timeLimitMs: number = 800,
+  multiPv: number = 1
 ): SearchStatistics {
   const chess = new Chess(fen);
   const startTime = performance.now();
@@ -744,6 +781,58 @@ export function searchIndependentBerserker(
     }
   }
 
+  // Multi-PV candidate lines generation
+  const multiPvLines: MultiPvCandidateLine[] = [];
+  if (bestMoveUci) {
+    multiPvLines.push({
+      rank: 1,
+      scoreCp: bestScore,
+      bestMoveSan,
+      bestMoveUci,
+      pv: principalVariation,
+    });
+  }
+
+  if (multiPv > 1) {
+    const legalMoves = chess.moves({ verbose: true });
+    const excludedUcis = new Set<string>([bestMoveUci]);
+
+    for (let rank = 2; rank <= Math.min(multiPv, legalMoves.length); rank++) {
+      let altBestScore = -30000;
+      let altBestMoveSan = '';
+      let altBestMoveUci = '';
+      let altPv: string[] = [];
+
+      for (const m of legalMoves) {
+        const uci = `${m.from}${m.to}${m.promotion || ''}`;
+        if (excludedUcis.has(uci)) continue;
+
+        chess.move(m);
+        const subPv: string[] = [];
+        const s = -pvsSearch(chess, Math.max(1, maxDepth - 1), 1, -30000, 30000, stats, subPv, m);
+        chess.undo();
+
+        if (s > altBestScore) {
+          altBestScore = s;
+          altBestMoveSan = m.san;
+          altBestMoveUci = uci;
+          altPv = [m.san, ...subPv];
+        }
+      }
+
+      if (altBestMoveUci) {
+        excludedUcis.add(altBestMoveUci);
+        multiPvLines.push({
+          rank,
+          scoreCp: altBestScore,
+          bestMoveSan: altBestMoveSan,
+          bestMoveUci: altBestMoveUci,
+          pv: altPv,
+        });
+      }
+    }
+  }
+
   const elapsedMs = Math.max(1, performance.now() - startTime);
   const nps = Math.round((stats.nodes / elapsedMs) * 1000);
   const evalDetails = evaluateBerserkerNnue(fen);
@@ -761,6 +850,7 @@ export function searchIndependentBerserker(
     pv: principalVariation,
     evalDetails,
     ttHits: stats.ttHits,
+    multiPvLines,
   };
 }
 

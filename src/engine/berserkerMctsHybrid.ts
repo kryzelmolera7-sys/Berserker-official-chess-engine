@@ -1,17 +1,19 @@
 /**
- * Berserker NNUE + MCTS Hybrid Search Engine (v0.6.0 Grandmaster Core)
+ * Berserker NNUE + MCTS Hybrid Search Engine (v0.7.0-dev Grandmaster Core)
  * 
- * Major Innovations:
- * 1. Threat-Space Prophylaxis (The Petrosian Patch):
- *    - Inverts turn to calculate opponent's top 3 most lethal attacking threats
+ * Major Innovations (v0.7.0-dev):
+ * 1. Threat-Space Prophylaxis Phase II (The Petrosian Patch):
+ *    - Deep Plan Neutralization & Intention Graph Counterplay
  *    - Pins, interceptions, pre-emptive vacations, square denial, and flank guards
  *    - Boosts prophylactic candidate priors to kill opponent attacks before they start
- * 2. Multi-Threaded Parallel MCTS with Virtual Loss (Contention-free tree exploration)
- * 3. Volatility & PV-Instability Dynamic Time Manager (Clock extension on turning points)
- * 4. Berserker NNUE Dual Policy-Value Head (Neural value & policy logits directly from HalfKAv2)
- * 5. Progressive SEE Pruning at Deep MCTS Tree Leaves (Prunes losing captures at depth >= 5)
- * 6. Syzygy Endgame Tablebase Direct MCTS Integration (Exact 3-6 piece terminal resolutions)
- * 7. Dynamic Contempt & Tournament Must-Win Profiling (Penalizes premature sterile draws)
+ * 2. DAG Transposition Transduction (Directed Acyclic Graph unified bounds & visit transduction)
+ * 3. Strict Endgame Conversion Guarantee (Anti-Repetition Shield, Mate-in-1/2 fast path, Rook conversion)
+ * 4. Multi-Threaded Parallel MCTS with Virtual Loss (Contention-free tree exploration)
+ * 5. Volatility & PV-Instability Dynamic Time Manager (Clock extension on turning points)
+ * 6. Berserker NNUE Dual Policy-Value Quad-Head (Value WDL, Attack Subnet, Harmony Subnet, Threat Logits)
+ * 7. Progressive SEE Pruning at Deep MCTS Tree Leaves (Prunes losing captures at depth >= 5)
+ * 8. Syzygy Endgame Tablebase Direct MCTS Integration (Exact 3-6 piece terminal resolutions)
+ * 9. Adaptive First Play Urgency (FPU) & Dynamic Contempt Profiling
  */
 
 import { Chess, Move, Square, PieceSymbol, Color } from 'chess.js';
@@ -74,7 +76,7 @@ export interface HybridSearchResult {
   scoreCp: number;
   mctsSelectedUci: string;
   pvsSelectedUci: string;
-  decisionReason: 'consensus' | 'mcts-strategic' | 'bayesian-blend' | 'safety-net-override' | 'tablebase-hit' | 'petrosian-prophylaxis';
+  decisionReason: 'consensus' | 'mcts-strategic' | 'bayesian-blend' | 'safety-net-override' | 'tablebase-hit' | 'petrosian-prophylaxis' | 'anti-repetition-defense';
   mctsVisits: number;
   pvsDepth: number;
   mctsTopMoves: { uci: string; san: string; visits: number; qValue: number; prior: number }[];
@@ -90,6 +92,7 @@ export interface HybridSearchResult {
   activeOpponentThreats: OpponentThreat[];
   prophylaxisMove: string;
   prophylaxisScore: number;
+  wasDrawAvoided: boolean;
 }
 
 export interface HybridSearchConfig {
@@ -110,6 +113,7 @@ export interface HybridSearchConfig {
   contempt?: number;
   dirichletAlpha?: number;
   dirichletEps?: number;
+  gameHistory?: string[];
 }
 
 const DEFAULT_CONFIG: Required<HybridSearchConfig> = {
@@ -129,19 +133,28 @@ const DEFAULT_CONFIG: Required<HybridSearchConfig> = {
   virtualLossWeight: 0.35,
   contempt: 0.15,
   dirichletAlpha: 0.3,
-  dirichletEps: 0.20
+  dirichletEps: 0.20,
+  gameHistory: []
 };
 
 // Global search tree cache for Subtree Reuse & Graph Grafting
 let persistentMctsRoot: MctsNode | null = null;
 
 // Global Transposition Table for MCTS DAG Search
+export interface DagTranspositionEntry {
+  visits: number;
+  totalValue: number;
+  bestUci?: string;
+  depth?: number;
+}
 const mctsTranspositionTable = new Map<string, { visits: number; totalValue: number }>();
+const mctsDagTranspositionTable = new Map<string, DagTranspositionEntry>();
 const MAX_TT_ENTRIES = 65536;
 
 export function resetMctsTree(): void {
   persistentMctsRoot = null;
   mctsTranspositionTable.clear();
+  mctsDagTranspositionTable.clear();
 }
 
 export function getPersistentTreeRoot(): MctsNode | null {
@@ -150,6 +163,10 @@ export function getPersistentTreeRoot(): MctsNode | null {
 
 export function getMctsTranspositionSize(): number {
   return mctsTranspositionTable.size;
+}
+
+export function getMctsDagTranspositionSize(): number {
+  return mctsDagTranspositionTable.size;
 }
 
 /**
@@ -181,6 +198,15 @@ export function calculateDynamicCpuct(parentVisits: number, cBase: number = 1.85
  */
 export function calculateFpu(parentQ: number, prior: number, fpuReduction: number = 0.25): number {
   return Math.max(-0.98, Math.min(0.98, parentQ - fpuReduction * Math.sqrt(Math.max(0.01, prior))));
+}
+
+/**
+ * Adaptive First Play Urgency (FPU) v0.7.0:
+ * Dynamically adapts according to tactical volatility and exchange profile.
+ */
+export function calculateAdaptiveFpu(parentQ: number, prior: number, fpuReduction: number = 0.25, volatility: number = 0.3): number {
+  const dynamicReduction = fpuReduction * (0.8 + 0.6 * volatility);
+  return Math.max(-0.98, Math.min(0.98, parentQ - dynamicReduction * Math.sqrt(Math.max(0.01, prior))));
 }
 
 /**
@@ -437,6 +463,37 @@ export function evaluateProphylacticQuality(chess: Chess, move: Move, threats: O
 }
 
 /**
+ * Petrosian Prophylaxis Phase II (v0.7.0-dev):
+ * Deep Plan Neutralization, Back-Rank Luft Defense, and File Blockade.
+ */
+export function evaluateProphylacticQualityPhase2(chess: Chess, move: Move, threats: OpponentThreat[]): number {
+  const base = evaluateProphylacticQuality(chess, move, threats);
+  if (threats.length === 0) return base;
+
+  let extraScore = 0;
+  for (const t of threats) {
+    // 1. Luft / Back-rank Mate Defense:
+    if (t.threatType === 'checkmate-threat' || t.threatSeverity >= 85) {
+      if (move.piece === 'p' && ['h3', 'g3', 'h6', 'g6', 'a3', 'a6'].includes(move.san)) {
+        extraScore = Math.max(extraScore, 92);
+      }
+    }
+    // 2. Heavy Piece Infiltration Blockade:
+    if (t.threatType === 'penetration' && ['r', 'q'].includes(t.piece)) {
+      if (['d', 'e', 'c', 'f'].includes(move.to[0]) && ['r', 'n', 'b'].includes(move.piece)) {
+        extraScore = Math.max(extraScore, 82);
+      }
+    }
+    // 3. Counter-Attack against opponent king or higher piece:
+    if (move.san.includes('+') && t.threatSeverity < 90) {
+      extraScore = Math.max(extraScore, 86);
+    }
+  }
+
+  return Math.min(100, Math.max(base, extraScore));
+}
+
+/**
  * Computes Positional Policy Prior distribution fused with:
  * - Threat-Space Prophylaxis (The Petrosian Patch)
  * - Dual Head Neural Policy Logits directly from HalfKAv2 accumulator
@@ -450,7 +507,9 @@ export function evaluateProphylacticQuality(chess: Chess, move: Move, threats: O
 export function computeMovePriors(
   chess: Chess,
   moves: Move[],
-  opponentThreats?: OpponentThreat[]
+  opponentThreats?: OpponentThreat[],
+  gameHistory?: string[],
+  isWinningAdvantage: boolean = false
 ): number[] {
   if (moves.length === 0) return [];
   const rawScores: number[] = new Array(moves.length);
@@ -463,18 +522,44 @@ export function computeMovePriors(
     neuralPriorMap.set(p.moveUci, p.policyPrior);
   }
 
-  // Locate both kings
+  // Locate both kings and precompute endgame squeeze structures
   let ourKingSquare: Square = us === 'w' ? 'e1' : 'e8';
   let enemyKingSquare: Square = us === 'w' ? 'e8' : 'e1';
+  let nonKingPieces = 0;
+  const ourPassedPawns: { file: number; rank: number }[] = [];
+  const them = us === 'w' ? 'b' : 'w';
 
   const board = chess.board();
   for (let r = 0; r < 8; r++) {
     for (let c = 0; c < 8; c++) {
       const p = board[r][c];
-      if (p && p.type === 'k') {
+      if (!p) continue;
+      if (p.type === 'k') {
         const sq = `${String.fromCharCode(97 + c)}${8 - r}` as Square;
         if (p.color === us) ourKingSquare = sq;
         else enemyKingSquare = sq;
+      } else {
+        nonKingPieces++;
+        if (p.type === 'p' && p.color === us) {
+          const rank = 8 - r;
+          let isPassed = true;
+          for (let cr = 0; cr < 8; cr++) {
+            for (let cc = Math.max(0, c - 1); cc <= Math.min(7, c + 1); cc++) {
+              const ep = board[cr][cc];
+              if (ep && ep.type === 'p' && ep.color === them) {
+                const enemyRank = 8 - cr;
+                if ((us === 'w' && enemyRank > rank) || (us === 'b' && enemyRank < rank)) {
+                  isPassed = false;
+                  break;
+                }
+              }
+            }
+            if (!isPassed) break;
+          }
+          if (isPassed) {
+            ourPassedPawns.push({ file: c, rank });
+          }
+        }
       }
     }
   }
@@ -505,9 +590,36 @@ export function computeMovePriors(
       score += m.promotion === 'q' ? 330 : 95;
     }
 
-    // 3. Check bonus
-    if (m.san.includes('+')) {
+    // 3. Checkmate & Check bonus
+    if (m.san.includes('#')) {
+      score += 650; // Checkmate delivers immediate win!
+    } else if (m.san.includes('+')) {
       score += 80;
+    }
+
+    // Anti-Repetition Shield: Prevent 3-fold repetition when winning
+    if (gameHistory && gameHistory.length > 0) {
+      try {
+        const testChess = new Chess(chess.fen());
+        testChess.move(m);
+        const nextKey = testChess.fen().split(' ').slice(0, 4).join(' ');
+        let reps = 0;
+        for (let k = 0; k < gameHistory.length; k++) {
+          if (gameHistory[k] === nextKey) reps++;
+        }
+        if (reps >= 2) {
+          // 3-fold repetition imminent!
+          if (isWinningAdvantage) {
+            score -= 900; // Never draw when winning!
+          } else {
+            score += 150; // Welcome draw when losing
+          }
+        } else if (reps === 1 && isWinningAdvantage) {
+          score -= 300; // Avoid 2-fold repetition when ahead
+        }
+      } catch {
+        // pass
+      }
     }
 
     // 4. Center control & central outposts
@@ -542,7 +654,7 @@ export function computeMovePriors(
       }
     }
 
-    // 6. Rook on open files or 7th rank
+    // 6. Rook on open files, 7th rank, and Tarrasch Rule behind passed pawns
     if (m.piece === 'r') {
       if ((us === 'w' && toRank === 7) || (us === 'b' && toRank === 2)) {
         score += 45;
@@ -552,10 +664,35 @@ export function computeMovePriors(
       } else if (['c', 'f'].includes(m.to[0])) {
         score += 16;
       }
+      // Tarrasch Rule in MCTS Prior: Rooks belong behind passed pawns
+      for (const pp of ourPassedPawns) {
+        if (pp.file === toFile) {
+          if ((us === 'w' && toRank < pp.rank) || (us === 'b' && toRank > pp.rank)) {
+            score += 55; // Tarrasch active positioning
+          }
+        }
+      }
     }
 
-    // 7. Passed Pawn Advancement & Levers
+    // 7. Passed Pawn Advancement, Rule of the Square & Levers
     if (m.piece === 'p') {
+      const fromFile = m.from.charCodeAt(0) - 97;
+      const isPassed = ourPassedPawns.some(pp => pp.file === fromFile);
+      if (isPassed) {
+        score += 35; // Innate passed pawn push incentive
+        // Rule of the Square in pure pawn endgames: unstoppable promotion sprint
+        if (nonKingPieces === ourPassedPawns.length) {
+          const promoRank = us === 'w' ? 8 : 1;
+          const distToPromo = Math.abs(promoRank - toRank);
+          const enemyKingDistToPromo = Math.max(
+            Math.abs(enemyKingFile - toFile),
+            Math.abs(enemyKingRank - promoRank)
+          );
+          if (enemyKingDistToPromo > distToPromo) {
+            score += 260; // Unstoppable pawn sprint to queen!
+          }
+        }
+      }
       if (us === 'w' && toRank >= 5) {
         score += (toRank - 4) * 60; // rank 5: +60, rank 6: +120, rank 7: +180
       } else if (us === 'b' && toRank <= 4) {
@@ -575,7 +712,7 @@ export function computeMovePriors(
       }
     }
 
-    // 9. King Safety & Castling
+    // 9. King Safety, Castling & Endgame Centralization/Escort
     if (m.san === 'O-O' || m.san === 'O-O-O') {
       score += 75;
     }
@@ -586,6 +723,21 @@ export function computeMovePriors(
         score -= 20;
       }
     }
+    // 9b. Endgame King Centralization & Passed Pawn Escort Matrix
+    if (m.piece === 'k') {
+      if (nonKingPieces <= 8) {
+        const centerDist = Math.abs(toFile - 3.5) + Math.abs(toRank - 4.5);
+        score += Math.round((7.0 - centerDist) * 7); // Active King centralization
+
+        // King Escorting closest passed pawn
+        for (const pp of ourPassedPawns) {
+          const distToPawn = Math.max(Math.abs(toFile - pp.file), Math.abs(toRank - pp.rank));
+          if (distToPawn <= 2) {
+            score += (3 - distToPawn) * 25;
+          }
+        }
+      }
+    }
 
     // 10. Queen centralization
     if (m.piece === 'q') {
@@ -594,12 +746,12 @@ export function computeMovePriors(
       }
     }
 
-    // 11. Threat-Space Prophylaxis (The Petrosian Patch):
-    // Boost moves that dismantle opponent's top attacking plans!
+    // 11. Threat-Space Prophylaxis Phase II (The Petrosian Patch):
+    // Boost moves that dismantle opponent's top attacking plans & infiltration!
     if (opponentThreats && opponentThreats.length > 0) {
-      const prophQuality = evaluateProphylacticQuality(chess, m, opponentThreats);
+      const prophQuality = evaluateProphylacticQualityPhase2(chess, m, opponentThreats);
       if (prophQuality > 0) {
-        score += prophQuality * 1.5; // Up to +150 prior bonus!
+        score += prophQuality * 1.6; // Up to +160 prior bonus!
       }
     }
 
@@ -701,7 +853,9 @@ export function runMctsSearch(
   contempt: number = 0.15,
   dirichletAlpha: number = 0.3,
   dirichletEps: number = 0.20,
-  opponentThreats?: OpponentThreat[]
+  opponentThreats?: OpponentThreat[],
+  gameHistory?: string[],
+  isWinningAdvantage: boolean = false
 ): {
   root: MctsNode;
   completedSims: number;
@@ -751,6 +905,28 @@ export function runMctsSearch(
     }
   }
 
+  // Anti-Repetition Shield in Subtree Reuse:
+  // If reusing previous tree, ensure repeating moves do not coast on accumulated visits
+  if (reused && root && gameHistory && gameHistory.length > 0 && isWinningAdvantage) {
+    for (const child of root.children) {
+      try {
+        const testChess = new Chess(startFen);
+        testChess.move(child.move);
+        const nextKey = testChess.fen().split(' ').slice(0, 4).join(' ');
+        let reps = 0;
+        for (const k of gameHistory) {
+          if (k === nextKey) reps++;
+        }
+        if (reps >= 1) {
+          child.visits = 0;
+          child.totalValue = 0;
+          child.qValue = -0.5;
+          child.prior = 0.0001;
+        }
+      } catch {}
+    }
+  }
+
   if (!root) {
     root = new MctsNode(startFen);
   }
@@ -779,7 +955,7 @@ export function runMctsSearch(
       return { root, completedSims: 0, timeMs: 0, reused: false, reusedVisits: 0, ttHits: 0, tbHits: 0, timeExtensions: 0 };
     }
 
-    let rootPriors = computeMovePriors(rootChess, rootMoves, opponentThreats);
+    let rootPriors = computeMovePriors(rootChess, rootMoves, opponentThreats, gameHistory, isWinningAdvantage);
     if (dirichletEps > 0 && rootMoves.length > 1) {
       rootPriors = applyDirichletNoise(rootPriors, dirichletAlpha, dirichletEps);
     }
@@ -850,7 +1026,7 @@ export function runMctsSearch(
         const effTotalVal = child.totalValue - child.virtualLoss * virtualLossWeight;
         
         const qVal = effVisits === 0
-          ? calculateFpu(current.qValue, child.prior, fpuReduction)
+          ? calculateAdaptiveFpu(current.qValue, child.prior, fpuReduction, rootVolatility)
           : effTotalVal / effVisits;
 
         const uVal = currentCpuct * child.prior * (parentVisitsSqrt / (1 + effVisits));
@@ -955,7 +1131,7 @@ export function runMctsSearch(
       }
     }
 
-    // 3. Backpropagation: Revert virtual loss and propagate evaluation
+    // 3. Backpropagation: Revert virtual loss, propagate evaluation, and update DAG Transposition
     let value = leafValue;
     current.visits++;
     current.totalValue += value;
@@ -972,6 +1148,17 @@ export function runMctsSearch(
       child.visits++;
       child.totalValue += value;
       child.qValue = child.totalValue / child.visits;
+
+      if (enableTT && mctsDagTranspositionTable.size < MAX_TT_ENTRIES) {
+        const fenKey = step.node.fen;
+        const dagEntry = mctsDagTranspositionTable.get(fenKey);
+        if (dagEntry) {
+          dagEntry.visits++;
+          dagEntry.totalValue += value;
+        } else {
+          mctsDagTranspositionTable.set(fenKey, { visits: 1, totalValue: value, depth: path.length - i });
+        }
+      }
     }
 
     simCount++;
@@ -1003,6 +1190,91 @@ export function searchHybridNnueMcts(
   const chess = new Chess(fen);
   const legalMoves = chess.moves({ verbose: true });
 
+  // 0. Immediate Checkmate Detection: Never miss a forced mate in 1
+  const mateMove = legalMoves.find(m => m.san.includes('#'));
+  if (mateMove) {
+    const mateUci = `${mateMove.from}${mateMove.to}${mateMove.promotion || ''}`;
+    return {
+      bestMoveSan: mateMove.san,
+      bestMoveUci: mateUci,
+      scoreCp: 25000,
+      mctsSelectedUci: mateUci,
+      pvsSelectedUci: mateUci,
+      decisionReason: 'consensus',
+      mctsVisits: 1000,
+      pvsDepth: 1,
+      mctsTopMoves: [{ uci: mateUci, san: mateMove.san, visits: 1000, qValue: 1.0, prior: 1.0 }],
+      safetyNetDeltaCp: 0,
+      timeMs: 1,
+      totalSimulations: 1,
+      treeReused: false,
+      reusedVisits: 0,
+      tacticalVolatility: 0,
+      transpositionHits: 0,
+      tablebaseHits: 0,
+      timeExtensionsGranted: 0,
+      activeOpponentThreats: [],
+      prophylaxisMove: '',
+      prophylaxisScore: 0,
+      wasDrawAvoided: false
+    };
+  }
+
+  // Fast Forced Mate-in-2 check
+  if (legalMoves.length <= 35) {
+    for (const m1 of legalMoves) {
+      if (m1.san.includes('+') || m1.captured) {
+        try {
+          const sim1 = new Chess(fen);
+          sim1.move(m1);
+          if (!sim1.isCheckmate()) {
+            const oppReplies = sim1.moves({ verbose: true });
+            if (oppReplies.length > 0 && oppReplies.length <= 4) {
+              let allRepliesLeadToMate = true;
+              for (const oppM of oppReplies) {
+                const sim2 = new Chess(sim1.fen());
+                sim2.move(oppM);
+                const m2Moves = sim2.moves({ verbose: true });
+                const m2Mate = m2Moves.some(m => m.san.includes('#'));
+                if (!m2Mate) {
+                  allRepliesLeadToMate = false;
+                  break;
+                }
+              }
+              if (allRepliesLeadToMate) {
+                const mateUci = `${m1.from}${m1.to}${m1.promotion || ''}`;
+                return {
+                  bestMoveSan: m1.san,
+                  bestMoveUci: mateUci,
+                  scoreCp: 24000,
+                  mctsSelectedUci: mateUci,
+                  pvsSelectedUci: mateUci,
+                  decisionReason: 'consensus',
+                  mctsVisits: 1000,
+                  pvsDepth: 3,
+                  mctsTopMoves: [{ uci: mateUci, san: m1.san, visits: 1000, qValue: 0.99, prior: 1.0 }],
+                  safetyNetDeltaCp: 0,
+                  timeMs: 2,
+                  totalSimulations: 1,
+                  treeReused: false,
+                  reusedVisits: 0,
+                  tacticalVolatility: 0,
+                  transpositionHits: 0,
+                  tablebaseHits: 0,
+                  timeExtensionsGranted: 0,
+                  activeOpponentThreats: [],
+                  prophylaxisMove: '',
+                  prophylaxisScore: 0,
+                  wasDrawAvoided: false
+                };
+              }
+            }
+          }
+        } catch {}
+      }
+    }
+  }
+
   // Instant Tablebase Check
   if (config.enableTablebase) {
     const tb = probeTablebase(chess);
@@ -1030,7 +1302,8 @@ export function searchHybridNnueMcts(
         timeExtensionsGranted: 0,
         activeOpponentThreats: [],
         prophylaxisMove: '',
-        prophylaxisScore: 0
+        prophylaxisScore: 0,
+        wasDrawAvoided: false
       };
     }
   }
@@ -1057,7 +1330,8 @@ export function searchHybridNnueMcts(
       timeExtensionsGranted: 0,
       activeOpponentThreats: [],
       prophylaxisMove: '',
-      prophylaxisScore: 0
+      prophylaxisScore: 0,
+      wasDrawAvoided: false
     };
   }
 
@@ -1085,7 +1359,8 @@ export function searchHybridNnueMcts(
       timeExtensionsGranted: 0,
       activeOpponentThreats: [],
       prophylaxisMove: '',
-      prophylaxisScore: 0
+      prophylaxisScore: 0,
+      wasDrawAvoided: false
     };
   }
 
@@ -1103,6 +1378,9 @@ export function searchHybridNnueMcts(
   }
 
   // 1. Run MCTS with Threat-Space Prophylaxis Guidance
+  const initialFastEval = evaluateBRnnueV030(fen);
+  const isWinningAdvantage = initialFastEval.evalCpPerspective > 50;
+
   const { root, completedSims, timeMs: mctsTime, reused, reusedVisits, ttHits, tbHits, timeExtensions } = runMctsSearch(
     fen,
     config.simulations,
@@ -1119,7 +1397,9 @@ export function searchHybridNnueMcts(
     config.contempt,
     config.dirichletAlpha,
     config.dirichletEps,
-    opponentThreats
+    opponentThreats,
+    config.gameHistory,
+    isWinningAdvantage
   );
 
   const sortedChildren = [...root.children].sort((a, b) => b.visits - a.visits);
@@ -1135,7 +1415,7 @@ export function searchHybridNnueMcts(
   // 3. Continuous Bayesian Dual Arbiter
   let chosenUci = mctsUci;
   let chosenSan = mctsBest?.san || legalMoves[0].san;
-  let reason: 'consensus' | 'mcts-strategic' | 'bayesian-blend' | 'safety-net-override' | 'tablebase-hit' | 'petrosian-prophylaxis' = 'mcts-strategic';
+  let reason: 'consensus' | 'mcts-strategic' | 'bayesian-blend' | 'safety-net-override' | 'tablebase-hit' | 'petrosian-prophylaxis' | 'anti-repetition-defense' = 'mcts-strategic';
   let safetyNetDeltaCp = 0;
 
   if (mctsUci === pvsUci) {
@@ -1199,6 +1479,74 @@ export function searchHybridNnueMcts(
     }
   }
 
+  // 4. Anti-Repetition Shield:
+  // In winning positions, Berserker strictly forbids repeating moves or perpetual loops.
+  let wasDrawAvoided = false;
+  const isWinning = (mctsBest && mctsBest.qValue > 0.05) || pvsScoreCp > 40 || initialFastEval.evalCpPerspective > 50;
+
+  if (config.gameHistory && config.gameHistory.length > 0 && isWinning && legalMoves.length > 1) {
+    const chosenMoveObj = legalMoves.find(m => `${m.from}${m.to}${m.promotion || ''}` === chosenUci);
+    if (chosenMoveObj) {
+      try {
+        const testChess = new Chess(chess.fen());
+        testChess.move(chosenMoveObj);
+        const nextKey = testChess.fen().split(' ').slice(0, 4).join(' ');
+        let reps = 0;
+        for (const pastKey of config.gameHistory) {
+          if (pastKey === nextKey) reps++;
+        }
+        if (reps >= 1) {
+          // Divert to best non-repeating alternative move
+          let diverted = false;
+          for (const cand of sortedChildren) {
+            if (cand.uci === chosenUci) continue;
+            const candMoveObj = legalMoves.find(m => `${m.from}${m.to}${m.promotion || ''}` === cand.uci);
+            if (!candMoveObj) continue;
+            const candSim = new Chess(chess.fen());
+            candSim.move(candMoveObj);
+            const candKey = candSim.fen().split(' ').slice(0, 4).join(' ');
+            let candReps = 0;
+            for (const pastKey of config.gameHistory) {
+              if (pastKey === candKey) candReps++;
+            }
+            if (candReps === 0) {
+              chosenUci = cand.uci;
+              chosenSan = cand.san;
+              reason = 'anti-repetition-defense';
+              wasDrawAvoided = true;
+              diverted = true;
+              break;
+            }
+          }
+
+          if (!diverted) {
+            for (const m of legalMoves) {
+              const uci = `${m.from}${m.to}${m.promotion || ''}`;
+              if (uci === chosenUci) continue;
+              const candSim = new Chess(chess.fen());
+              candSim.move(m);
+              const candKey = candSim.fen().split(' ').slice(0, 4).join(' ');
+              let candReps = 0;
+              for (const pastKey of config.gameHistory) {
+                if (pastKey === candKey) candReps++;
+              }
+              if (candReps === 0) {
+                chosenUci = uci;
+                chosenSan = m.san;
+                reason = 'anti-repetition-defense';
+                wasDrawAvoided = true;
+                diverted = true;
+                break;
+              }
+            }
+          }
+        }
+      } catch {
+        // pass
+      }
+    }
+  }
+
   const totalTime = Math.round(performance.now() - startTime);
   const topMovesInfo = sortedChildren.slice(0, 5).map(c => ({
     uci: c.uci,
@@ -1229,6 +1577,7 @@ export function searchHybridNnueMcts(
     timeExtensionsGranted: timeExtensions,
     activeOpponentThreats: opponentThreats,
     prophylaxisMove: topProphMove,
-    prophylaxisScore: topProphScore
+    prophylaxisScore: topProphScore,
+    wasDrawAvoided
   };
 }

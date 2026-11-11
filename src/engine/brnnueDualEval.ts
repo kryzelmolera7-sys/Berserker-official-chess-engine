@@ -443,8 +443,9 @@ export function evaluateBerserkerDualPolicyValue(
     if (['e4', 'd4', 'e5', 'd5'].includes(m.to)) logit += 2.2;
     else if (['c4', 'f4', 'c5', 'f5'].includes(m.to)) logit += 1.4;
 
-    // Checks and forcing threats
-    if (m.san && m.san.includes('+')) logit += 3.5;
+    // Checks, checkmates and forcing threats
+    if (m.san && m.san.includes('#')) logit += 25.0; // Immediate checkmate
+    else if (m.san && m.san.includes('+')) logit += 3.5;
     if (m.promotion === 'q') logit += 8.0;
 
     // Advanced passed pawn push (Rank 6/7 for White, Rank 3/2 for Black)
@@ -478,6 +479,231 @@ export function evaluateBerserkerDualPolicyValue(
     value: valNormalized,
     winProb: evalResult.winProb,
     policyPriors
+  };
+}
+
+/**
+ * BRnnue v0.7.0 Quad-Head Evaluation
+ */
+export interface BRnnueV070QuadEval {
+  netId: 'berserker_brnnue_v070.nnue';
+  version: 'BRnnuev070';
+  centipawns: number;
+  evalCpPerspective: number;
+  winProb: number;
+  drawProb: number;
+  lossProb: number;
+  berserkerAttackSubnet: SubNetEvaluation;
+  berserkerHarmonySubnet: SubNetEvaluation;
+  threatPredictionHead: {
+    predictedThreatCount: number;
+    highestThreatSeverity: number;
+    vulnerableSquares: string[];
+  };
+  endgameConversionHead: {
+    conversionCertainty: number;
+    materialDominance: number;
+    passedPawnUrgency: number;
+  };
+  phaseWeight: {
+    berserkerWeight: number;
+    plentyChessWeight: number;
+    gamePhase: 'Opening' | 'Middlegame' | 'Endgame';
+  };
+  tacticalTensionIndex: number;
+}
+
+/**
+ * Centipawn Squeeze Matrix:
+ * Extracts positional micro-advantages in endgames and dynamic conversions:
+ * 1. Rule of the Square & Unstoppable Passed Pawn sprint
+ * 2. Tarrasch Rook Placement (Rook behind passed pawn)
+ * 3. King Centralization & Opposition Drive
+ * 4. King Escorting Passed Pawn
+ * 5. Rook Cutoff against enemy king
+ */
+export function computeEndgameSqueezeBonus(chess: Chess): number {
+  const board = chess.board();
+  const us = chess.turn();
+  const them = us === 'w' ? 'b' : 'w';
+  let nonKingPieces = 0;
+  let ourKingSq = { file: 4, rank: us === 'w' ? 1 : 8 };
+  let theirKingSq = { file: 4, rank: us === 'w' ? 8 : 1 };
+  const ourPassedPawns: { file: number; rank: number }[] = [];
+  const ourRooks: { file: number; rank: number }[] = [];
+
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const p = board[r][c];
+      if (!p) continue;
+      const rank = 8 - r;
+      const file = c;
+      if (p.type === 'k') {
+        if (p.color === us) ourKingSq = { file, rank };
+        else theirKingSq = { file, rank };
+      } else {
+        nonKingPieces++;
+        if (p.color === us) {
+          if (p.type === 'r') ourRooks.push({ file, rank });
+          if (p.type === 'p') {
+            // Check if passed pawn (no enemy pawns in front on same or adjacent files)
+            let isPassed = true;
+            for (let checkR = 0; checkR < 8; checkR++) {
+              for (let checkC = Math.max(0, c - 1); checkC <= Math.min(7, c + 1); checkC++) {
+                const ep = board[checkR][checkC];
+                if (ep && ep.type === 'p' && ep.color === them) {
+                  const enemyRank = 8 - checkR;
+                  if ((us === 'w' && enemyRank > rank) || (us === 'b' && enemyRank < rank)) {
+                    isPassed = false;
+                    break;
+                  }
+                }
+              }
+              if (!isPassed) break;
+            }
+            if (isPassed) {
+              ourPassedPawns.push({ file, rank });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  let squeezeBonusCp = 0;
+  const isEndgame = nonKingPieces <= 8;
+
+  // 1. King Centralization & Opposition in Endgame
+  if (isEndgame) {
+    const ourDistToCenter = Math.abs(ourKingSq.file - 3.5) + Math.abs(ourKingSq.rank - 4.5);
+    squeezeBonusCp += Math.round((7.0 - ourDistToCenter) * 6);
+
+    const enemyDistToCenter = Math.abs(theirKingSq.file - 3.5) + Math.abs(theirKingSq.rank - 4.5);
+    squeezeBonusCp += Math.round(enemyDistToCenter * 5);
+
+    const kingDistF = Math.abs(ourKingSq.file - theirKingSq.file);
+    const kingDistR = Math.abs(ourKingSq.rank - theirKingSq.rank);
+    if ((kingDistF === 0 && kingDistR === 2) || (kingDistR === 0 && kingDistF === 2)) {
+      squeezeBonusCp += 20; // Direct Opposition
+    }
+  }
+
+  // 2. Passed Pawn Escort & Rule of the Square
+  for (const pp of ourPassedPawns) {
+    const promotionRank = us === 'w' ? 8 : 1;
+    const distToPromo = Math.abs(promotionRank - pp.rank);
+    
+    if (us === 'w') {
+      if (pp.rank === 5) squeezeBonusCp += 45;
+      else if (pp.rank === 6) squeezeBonusCp += 95;
+      else if (pp.rank === 7) squeezeBonusCp += 180;
+    } else {
+      if (pp.rank === 4) squeezeBonusCp += 45;
+      else if (pp.rank === 3) squeezeBonusCp += 95;
+      else if (pp.rank === 2) squeezeBonusCp += 180;
+    }
+
+    // King Escort: Our king close to passed pawn
+    const kingDistToPawn = Math.max(Math.abs(ourKingSq.file - pp.file), Math.abs(ourKingSq.rank - pp.rank));
+    if (kingDistToPawn <= 2) {
+      squeezeBonusCp += (3 - kingDistToPawn) * 25;
+    }
+
+    // Rule of the Square in pure pawn endgames
+    if (nonKingPieces === ourPassedPawns.length) {
+      const squareSize = distToPromo;
+      const enemyKingDistToPromo = Math.max(
+        Math.abs(theirKingSq.file - pp.file),
+        Math.abs(theirKingSq.rank - promotionRank)
+      );
+      if (enemyKingDistToPromo > squareSize) {
+        squeezeBonusCp += 650;
+      }
+    }
+
+    // 3. Tarrasch Rule: Rook behind passed pawn
+    for (const rk of ourRooks) {
+      if (rk.file === pp.file) {
+        const isBehind = (us === 'w' && rk.rank < pp.rank) || (us === 'b' && rk.rank > pp.rank);
+        if (isBehind) {
+          squeezeBonusCp += 55;
+        }
+      }
+    }
+  }
+
+  return squeezeBonusCp;
+}
+
+export function evaluateBRnnueV070(fen: string): BRnnueV070QuadEval {
+  const base = evaluateBRnnueV030(fen);
+  const chess = new Chess(fen);
+  const moves = chess.moves({ verbose: true });
+  
+  // Quad-Head Threat Logits:
+  const vulnerableSquares: string[] = [];
+  let threatCount = 0;
+  let maxSeverity = 0;
+
+  for (const m of moves) {
+    if (m.captured) {
+      threatCount++;
+      if (!vulnerableSquares.includes(m.to)) vulnerableSquares.push(m.to);
+      maxSeverity = Math.max(maxSeverity, m.captured === 'q' ? 90 : m.captured === 'r' ? 65 : 40);
+    }
+  }
+
+  // Quad-Head Endgame Conversion Analysis:
+  const board = chess.board();
+  let nonKingPieces = 0;
+  let ourPawns = 0;
+  let theirPawns = 0;
+  const us = chess.turn();
+
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const p = board[r][c];
+      if (p) {
+        if (p.type !== 'k') nonKingPieces++;
+        if (p.type === 'p') {
+          if (p.color === us) ourPawns++;
+          else theirPawns++;
+        }
+      }
+    }
+  }
+
+  const isEndgame = nonKingPieces <= 6;
+  const squeezeBonus = computeEndgameSqueezeBonus(chess);
+  const squeezedCentipawns = base.centipawns + squeezeBonus;
+  const squeezedPerspective = base.evalCpPerspective + (us === 'w' ? squeezeBonus : -squeezeBonus);
+
+  const conversionCertainty = isEndgame && squeezedCentipawns > 100 
+    ? Math.min(0.99, 0.70 + (squeezedCentipawns / 1000) * 0.25)
+    : Math.max(0.05, Math.min(0.95, base.winProb));
+
+  return {
+    netId: 'berserker_brnnue_v070.nnue',
+    version: 'BRnnuev070',
+    centipawns: squeezedCentipawns,
+    evalCpPerspective: squeezedPerspective,
+    winProb: base.winProb,
+    drawProb: base.drawProb,
+    lossProb: base.lossProb,
+    berserkerAttackSubnet: base.berserker090,
+    berserkerHarmonySubnet: base.plentychess,
+    threatPredictionHead: {
+      predictedThreatCount: threatCount,
+      highestThreatSeverity: maxSeverity,
+      vulnerableSquares: vulnerableSquares.slice(0, 4)
+    },
+    endgameConversionHead: {
+      conversionCertainty: Math.round(conversionCertainty * 100) / 100,
+      materialDominance: Math.round((ourPawns - theirPawns) * 10) / 10,
+      passedPawnUrgency: isEndgame ? 85 : 30
+    },
+    phaseWeight: base.phaseWeight,
+    tacticalTensionIndex: base.tacticalTensionIndex
   };
 }
 

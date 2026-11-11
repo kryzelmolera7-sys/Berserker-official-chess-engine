@@ -30,7 +30,8 @@ import {
   Crown,
   ShieldAlert,
   Swords,
-  Sliders
+  Sliders,
+  Shuffle
 } from 'lucide-react';
 import { probeTablebase, TablebaseResult, countPieces } from './tablebaseService';
 import { saveGameRecord } from './firebaseService';
@@ -47,6 +48,13 @@ import {
 } from './engine/engineHeuristics';
 import { evaluateBerserkerNnue, updateActiveBerserkerNet } from './engine/berserkerNnue';
 import { searchIndependentBerserker } from './engine/berserkerIndependentSearch';
+import { 
+  getChess960PositionInfo, 
+  getRandomChess960Index, 
+  resolveChess960Move, 
+  executeChess960Castling, 
+  Chess960PositionInfo 
+} from './engine/chess960';
 
 interface PlayVsEngineProps {
   maxThreads?: number;
@@ -62,6 +70,12 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
   const [playerColor, setPlayerColor] = useState<'w' | 'b'>('w');
   const [engineMode, setEngineMode] = useState<'berserker-nnue'>('berserker-nnue');
   
+  // Chess960 (Fischer Random) Mode State
+  const [isChess960, setIsChess960] = useState<boolean>(false);
+  const [chess960SpIndex, setChess960SpIndex] = useState<number>(518);
+  const [chess960Info, setChess960Info] = useState<Chess960PositionInfo | null>(null);
+  const [chess960InputSp, setChess960InputSp] = useState<string>('518');
+
   // Dynamic 24/7 Server Daemon Checkpoint Sync
   const [activeNetId, setActiveNetId] = useState<string>('berserker_dual_net_ep9_b400.nnue');
   const [activeEpoch, setActiveEpoch] = useState<number>(9);
@@ -904,6 +918,48 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
     const square = `${colLetter}${rowNum}`;
 
     if (selectedSquare) {
+      // Chess960 Castling resolution (clicking King then King's friendly Rook or destination)
+      if (isChess960 && chess960Info) {
+        const uciCandidate = `${selectedSquare}${square}`;
+        const resolved = resolveChess960Move(chess, uciCandidate, chess960Info.castlingConfig);
+        if (resolved.isChess960Castling && resolved.side) {
+          const nextFen = executeChess960Castling(chess, resolved.side, chess960Info.castlingConfig);
+          setFen(nextFen);
+          setCurrentBookEntry(null);
+          setLastMoveSquares({ from: selectedSquare, to: square });
+          setSelectedSquare(null);
+          setLegalMoves([]);
+          setHintMove(null);
+
+          const castlingSan = resolved.side === 'kingside' ? 'O-O' : 'O-O-O';
+          const turnIsBlackNow = chess.turn() === 'b';
+          setMoveHistory((prev) => {
+            if (turnIsBlackNow) {
+              return [...prev, { moveNumber: prev.length + 1, w: castlingSan }];
+            } else {
+              const updated = [...prev];
+              if (updated.length > 0) {
+                updated[updated.length - 1].b = castlingSan;
+              }
+              return updated;
+            }
+          });
+
+          if (chess.isGameOver()) {
+            if (chess.isCheckmate()) {
+              const winner = chess.turn() === 'w' ? 'Black' : 'White';
+              const resultStr = chess.turn() === 'w' ? '0-1' : '1-0';
+              setGameResult(`Checkmate! ${winner} wins!`);
+              handleAutoSaveCompletedGame(resultStr, `Checkmate by ${winner}`);
+            } else if (chess.isDraw()) {
+              setGameResult('Game drawn (Stalemate / Insufficient Material / Repetition).');
+              handleAutoSaveCompletedGame('1/2-1/2', 'Draw by stalemate or repetition');
+            }
+          }
+          return;
+        }
+      }
+
       try {
         const move = chess.move({
           from: selectedSquare,
@@ -965,7 +1021,32 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
     }
   };
 
-  const handleNewGame = () => {
+  const handleStartChess960 = (requestedIndex?: number) => {
+    const targetIdx = requestedIndex !== undefined ? requestedIndex : getRandomChess960Index();
+    const info = getChess960PositionInfo(targetIdx);
+    setChess960SpIndex(targetIdx);
+    setChess960InputSp(targetIdx.toString());
+    setChess960Info(info);
+    setIsChess960(true);
+    chess.load(info.fen);
+    setFen(info.fen);
+    setCurrentBookEntry(null);
+    setLastBlendedMove(null);
+    setSelectedSquare(null);
+    setLegalMoves([]);
+    setLastMoveSquares(null);
+    setMoveHistory([]);
+    setGameResult(null);
+    setHintMove(null);
+    setIsEngineThinking(false);
+    setEvalCp(0);
+    sendWasmCommand('setoption name UCI_Chess960 value true');
+    sendWasmCommand(`position fen ${info.fen}`);
+  };
+
+  const handleStandardChessReset = () => {
+    setIsChess960(false);
+    setChess960Info(null);
     chess.reset();
     const startFen = chess.fen();
     setFen(startFen);
@@ -979,6 +1060,16 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
     setHintMove(null);
     setIsEngineThinking(false);
     setEvalCp(0);
+    sendWasmCommand('setoption name UCI_Chess960 value false');
+    sendWasmCommand('position startpos');
+  };
+
+  const handleNewGame = () => {
+    if (isChess960) {
+      handleStartChess960(chess960SpIndex);
+    } else {
+      handleStandardChessReset();
+    }
   };
 
   const handleTakeback = () => {
@@ -1019,13 +1110,13 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
             <div className="flex items-center gap-2">
               <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-purple-500/10 text-purple-400 border border-purple-500/20 flex items-center gap-1.5 shadow-sm">
                 <Gem className="w-3.5 h-3.5" />
-                Berserker v0.6.0 Grandmaster Core
+                Berserker v0.7.0-dev Grandmaster Core
               </span>
-              <span className="text-xs text-slate-400">Pure-PVS Alpha-Beta & Berserker NNUE</span>
+              <span className="text-xs text-slate-400">Neural MCTS-DAG & Quad-Head BRnnue</span>
             </div>
-            <h3 className="text-xl font-bold text-white mt-1">Play Against Berserker v0.6.0</h3>
+            <h3 className="text-xl font-bold text-white mt-1">Play Against Berserker v0.7.0-dev</h3>
             <p className="text-xs text-slate-400 mt-0.5">
-              64 Threads • 32 GB Hash • Blunder-Free Pure-PVS • Grandmaster Berserker NNUE
+              64 Threads • 32 GB Hash • Threat-Space Prophylaxis II • Quad-Head BRnnue • Bayesian Dual Arbiter
             </p>
           </div>
 

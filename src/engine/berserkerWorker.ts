@@ -15,12 +15,23 @@
  */
 
 import { Chess } from 'chess.js';
-import { evaluateBRnnueV030, evaluateBerserker10Nnue } from './brnnueDualEval';
+import { evaluateBRnnueV030, evaluateBRnnueV070, evaluateBerserker10Nnue } from './brnnueDualEval';
 import { searchHybridNnueMcts, resetMctsTree } from './berserkerMctsHybrid';
+import { 
+  normalizeChess960Fen, 
+  resolveChess960Move, 
+  executeChess960Castling, 
+  extractCastlingConfig, 
+  Chess960CastlingConfig 
+} from './chess960';
 
-const ENGINE_NAME = "Berserker v0.6.0";
+const ENGINE_NAME = "Berserker v0.7.0-dev";
 const ENGINE_AUTHOR = "Berserker Engine Team";
-const DEFAULT_NET = "berserker_brnnue_v040.nnue";
+const DEFAULT_NET = "berserker_brnnue_v070.nnue";
+
+// Chess960 (FRC) State
+let uciChess960 = false;
+let currentChess960Config: Chess960CastlingConfig | undefined;
 
 // TT Entry Flags
 const TT_FLAG = {
@@ -39,6 +50,7 @@ interface TTEntry {
 
 // Global search state
 let currentChess = new Chess();
+let gameHistoryFens: string[] = [];
 let isSearching = false;
 let stopRequested = false;
 
@@ -652,6 +664,16 @@ function executeRootSearch(targetDepth = 12, maxTimeMs = 3000) {
     return;
   }
 
+  // Instant Mate-in-1 check
+  const mateMove = moves.find(m => m.san && m.san.includes('#'));
+  if (mateMove) {
+    const mateUci = `${mateMove.from}${mateMove.to}${mateMove.promotion || ''}`;
+    isSearching = false;
+    self.postMessage(`info depth 1 score mate 1 nodes 1 nps 1000 time 1 pv ${mateUci}`);
+    self.postMessage(`bestmove ${mateUci}`);
+    return;
+  }
+
   const stats = { nodes: 0, qnodes: 0, seldepth: 0, ttHits: 0 };
   let bestMoveUci = `${moves[0].from}${moves[0].to}${moves[0].promotion || ''}`;
   let bestScore = 0;
@@ -720,8 +742,46 @@ function executeRootSearch(targetDepth = 12, maxTimeMs = 3000) {
     }
 
     self.postMessage(
-      `info depth ${currentDepth} seldepth ${stats.seldepth} ${scoreStr} nodes ${totalNodes} nps ${nps} time ${elapsedMs} hashfull ${Math.min(100, Math.round((transpositionTable.size / MAX_TT_SIZE) * 100))} pv ${pvStr}`
+      `info depth ${currentDepth} seldepth ${stats.seldepth} multipv 1 ${scoreStr} nodes ${totalNodes} nps ${nps} time ${elapsedMs} hashfull ${Math.min(100, Math.round((transpositionTable.size / MAX_TT_SIZE) * 100))} pv ${pvStr}`
     );
+
+    // Multi-PV candidate lines exploration
+    if (multiPv > 1) {
+      const excludedUcis = new Set<string>([bestMoveUci]);
+      for (let rank = 2; rank <= Math.min(multiPv, moves.length); rank++) {
+        let altScore = -30000;
+        let altPv: string[] = [];
+        let altBestUci = '';
+
+        for (const m of moves) {
+          const uci = `${m.from}${m.to}${m.promotion || ''}`;
+          if (excludedUcis.has(uci)) continue;
+
+          currentChess.move(m);
+          const subPv: string[] = [];
+          const s = -pvsSearch(currentChess, Math.max(1, currentDepth - 1), 1, -30000, 30000, stats, subPv, startTime, maxTimeMs, null, m);
+          currentChess.undo();
+
+          if (s > altScore) {
+            altScore = s;
+            altBestUci = uci;
+            altPv = [uci, ...subPv];
+          }
+        }
+
+        if (altBestUci) {
+          excludedUcis.add(altBestUci);
+          let altScoreStr = `score cp ${altScore}`;
+          if (Math.abs(altScore) > 20000) {
+            const mateDist = Math.ceil((25000 - Math.abs(altScore)) / 2);
+            altScoreStr = `score mate ${altScore > 0 ? mateDist : -mateDist}`;
+          }
+          self.postMessage(
+            `info depth ${currentDepth} seldepth ${stats.seldepth} multipv ${rank} ${altScoreStr} nodes ${totalNodes} nps ${nps} time ${elapsedMs} pv ${altPv.join(' ')}`
+          );
+        }
+      }
+    }
 
     // Time Management: Adjust based on move stability
     if (bestMoveUci === lastBestMoveUci) {
@@ -739,8 +799,56 @@ function executeRootSearch(targetDepth = 12, maxTimeMs = 3000) {
     if (elapsedMs >= dynamicLimit) break;
   }
 
+  // Anti-Repetition Shield: Ensure White never repeats positions when winning
+  if (bestScore > 50 && gameHistoryFens.length > 0 && moves.length > 1) {
+    try {
+      const testChess = new Chess(currentChess.fen());
+      testChess.move({ from: bestMoveUci.slice(0, 2), to: bestMoveUci.slice(2, 4), promotion: bestMoveUci[4] });
+      const nextKey = testChess.fen().split(' ').slice(0, 4).join(' ');
+      let reps = 0;
+      for (const k of gameHistoryFens) {
+        if (k === nextKey) reps++;
+      }
+      if (reps >= 1) {
+        for (const m of moves) {
+          const uci = `${m.from}${m.to}${m.promotion || ''}`;
+          if (uci === bestMoveUci) continue;
+          const sim = new Chess(currentChess.fen());
+          sim.move(m);
+          const candKey = sim.fen().split(' ').slice(0, 4).join(' ');
+          let candReps = 0;
+          for (const k of gameHistoryFens) {
+            if (k === candKey) candReps++;
+          }
+          if (candReps === 0) {
+            bestMoveUci = uci;
+            break;
+          }
+        }
+      }
+    } catch {}
+  }
+
+  let outBestMove = bestMoveUci;
+  if (uciChess960 && currentChess960Config) {
+    const isWhite = currentChess.turn() === 'w';
+    const kingSq = isWhite
+      ? `${String.fromCharCode(97 + currentChess960Config.whiteKingFile)}1`
+      : `${String.fromCharCode(97 + currentChess960Config.blackKingFile)}8`;
+    if (bestMoveUci.startsWith(kingSq)) {
+      const dest = bestMoveUci.slice(2, 4);
+      if (dest === (isWhite ? 'g1' : 'g8')) {
+        const rookFile = isWhite ? currentChess960Config.whiteKingRookFile : currentChess960Config.blackKingRookFile;
+        outBestMove = `${kingSq}${String.fromCharCode(97 + rookFile)}${isWhite ? '1' : '8'}`;
+      } else if (dest === (isWhite ? 'c1' : 'c8')) {
+        const rookFile = isWhite ? currentChess960Config.whiteQueenRookFile : currentChess960Config.blackQueenRookFile;
+        outBestMove = `${kingSq}${String.fromCharCode(97 + rookFile)}${isWhite ? '1' : '8'}`;
+      }
+    }
+  }
+
   isSearching = false;
-  self.postMessage(`bestmove ${bestMoveUci}`);
+  self.postMessage(`bestmove ${outBestMove}`);
 }
 
 // UCI Command Parser Loop
@@ -758,8 +866,12 @@ self.onmessage = function (event) {
       self.postMessage('option name Threads type spin default 64 min 1 max 64');
       self.postMessage('option name Hash type spin default 32768 min 16 max 65536');
       self.postMessage('option name MultiPV type spin default 1 min 1 max 5');
-      self.postMessage('option name EvalMode type combo default brnnue-v030 var brnnue-v030 var berserker-1.0-nnue var aura-nnue');
-      self.postMessage('option name SearchMode type combo default Pure-PVS var Pure-PVS var Hybrid-MCTS-PVS var Pure-MCTS');
+      self.postMessage('option name UCI_Chess960 type check default false');
+      self.postMessage('option name EvalMode type combo default brnnue-v070-quad var brnnue-v070-quad var brnnue-v030 var berserker-1.0-nnue var aura-nnue');
+      self.postMessage('option name SearchMode type combo default Hybrid-MCTS-PVS var Hybrid-MCTS-PVS var Pure-PVS var Pure-MCTS');
+      self.postMessage('option name PetrosianProphylaxis type check default true');
+      self.postMessage('option name DagTransposition type check default true');
+      self.postMessage('option name AntiRepetitionShield type check default true');
       self.postMessage('option name TacticalContempt type spin default 45 min -100 max 100');
       self.postMessage('option name KingAttackScale type spin default 140 min 50 max 250');
       self.postMessage(`option name NNUE_Net type string default ${DEFAULT_NET}`);
@@ -772,32 +884,46 @@ self.onmessage = function (event) {
 
     case 'ucinewgame':
       currentChess = new Chess();
+      gameHistoryFens = [];
       clearSearchState();
       resetMctsTree();
       break;
 
     case 'position':
+      gameHistoryFens = [];
       if (parts[1] === 'startpos') {
         currentChess = new Chess();
+        gameHistoryFens.push(currentChess.fen().split(' ').slice(0, 4).join(' '));
         const movesIdx = parts.indexOf('moves');
         if (movesIdx !== -1) {
           for (let i = movesIdx + 1; i < parts.length; i++) {
             const mv = parts[i];
             currentChess.move({ from: mv.slice(0, 2), to: mv.slice(2, 4), promotion: mv[4] || undefined });
+            gameHistoryFens.push(currentChess.fen().split(' ').slice(0, 4).join(' '));
           }
         }
       } else if (parts[1] === 'fen') {
         const movesIdx = parts.indexOf('moves');
-        const fenParts = (movesIdx !== -1 ? parts.slice(2, movesIdx) : parts.slice(2)).join(' ');
+        const rawFen = (movesIdx !== -1 ? parts.slice(2, movesIdx) : parts.slice(2)).join(' ');
+        const { normalizedFen } = normalizeChess960Fen(rawFen);
         try {
-          currentChess = new Chess(fenParts);
+          currentChess = new Chess(normalizedFen);
+          const backrank = normalizedFen.split('/')[7]?.split(' ')[0] || 'RNBQKBNR';
+          currentChess960Config = extractCastlingConfig(backrank);
+          gameHistoryFens.push(currentChess.fen().split(' ').slice(0, 4).join(' '));
           if (movesIdx !== -1) {
             for (let i = movesIdx + 1; i < parts.length; i++) {
               const mv = parts[i];
-              currentChess.move({ from: mv.slice(0, 2), to: mv.slice(2, 4), promotion: mv[4] || undefined });
+              const resolved = resolveChess960Move(currentChess, mv, currentChess960Config);
+              if (resolved.isChess960Castling && resolved.side) {
+                executeChess960Castling(currentChess, resolved.side, currentChess960Config);
+              } else {
+                currentChess.move({ from: mv.slice(0, 2), to: mv.slice(2, 4), promotion: mv[4] || undefined });
+              }
+              gameHistoryFens.push(currentChess.fen().split(' ').slice(0, 4).join(' '));
             }
           }
-        } catch (e) {
+        } catch {
           self.postMessage('info string Invalid FEN provided');
         }
       }
@@ -817,7 +943,8 @@ self.onmessage = function (event) {
         const hybridRes = searchHybridNnueMcts(currentChess.fen(), {
           maxTimeMs: movetime,
           safetyNetDepth: Math.min(depth, 8),
-          simulations: 800
+          simulations: 800,
+          gameHistory: gameHistoryFens
         });
 
         const topMovesStr = hybridRes.mctsTopMoves.map(m => `${m.uci}(${m.visits}v,${m.qValue}q)`).join(' ');
@@ -847,6 +974,7 @@ self.onmessage = function (event) {
         if (optName === 'Threads') threads = parseInt(optVal, 10);
         if (optName === 'Hash') hashMb = parseInt(optVal, 10);
         if (optName === 'MultiPV') multiPv = parseInt(optVal, 10);
+        if (optName === 'UCI_Chess960') uciChess960 = optVal === 'true';
         if (optName === 'TacticalContempt') tacticalContempt = parseInt(optVal, 10);
         if (optName === 'KingAttackScale') kingAttackScale = parseInt(optVal, 10);
       }
@@ -854,14 +982,16 @@ self.onmessage = function (event) {
     }
 
     case 'eval': {
-      const dualEval = evaluateBRnnueV030(currentChess.fen());
+      const quadEval = evaluateBRnnueV070(currentChess.fen());
       const bsz10Eval = evaluateBerserker10Nnue(currentChess.fen());
       self.postMessage(`=== ${ENGINE_NAME} NEURAL EVALUATION ===`);
       self.postMessage(`FEN: ${currentChess.fen()}`);
       self.postMessage(`Turn: ${currentChess.turn() === 'w' ? 'White' : 'Black'}`);
-      self.postMessage(`Berserker NNUE (Dual Subnets): ${dualEval.centipawns > 0 ? '+' : ''}${(dualEval.centipawns / 100).toFixed(2)} (${dualEval.centipawns} cp)`);
-      self.postMessage(`  - Subnet 1 (Berserker Attack): HalfKP-1024 King Attack Vectors (${dualEval.berserker090.centipawns} cp)`);
-      self.postMessage(`  - Subnet 2 (Berserker Positional): HalfKAv2-1024 Harmony (${dualEval.plentychess.centipawns} cp)`);
+      self.postMessage(`Berserker NNUE v0.7.0 Quad-Head: ${quadEval.centipawns > 0 ? '+' : ''}${(quadEval.centipawns / 100).toFixed(2)} (${quadEval.centipawns} cp) [Win: ${(quadEval.winProb * 100).toFixed(1)}%]`);
+      self.postMessage(`  - Head 1 (Berserker Attack): HalfKP-1024 King Attack Vectors (${quadEval.berserkerAttackSubnet.centipawns} cp)`);
+      self.postMessage(`  - Head 2 (Berserker Harmony): HalfKAv2-1024 Spatial Harmony (${quadEval.berserkerHarmonySubnet.centipawns} cp)`);
+      self.postMessage(`  - Head 3 (Threat Predictor):  ${quadEval.threatPredictionHead.predictedThreatCount} threats, max severity ${quadEval.threatPredictionHead.highestThreatSeverity}`);
+      self.postMessage(`  - Head 4 (Endgame Conversion): ${(quadEval.endgameConversionHead.conversionCertainty * 100).toFixed(1)}% certainty, pass pawn urgency ${quadEval.endgameConversionHead.passedPawnUrgency}`);
       self.postMessage(`Berserker 1.0 NNUE:          ${bsz10Eval.centipawns > 0 ? '+' : ''}${(bsz10Eval.centipawns / 100).toFixed(2)} (${bsz10Eval.centipawns} cp)`);
       self.postMessage(`Active Net:                  ${DEFAULT_NET}`);
       break;

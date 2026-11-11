@@ -360,17 +360,30 @@ const DOWNLOAD_ITEMS: DownloadItem[] = [
 
   // Standalone Universal CLI Engine
   {
+    id: 'cli-standalone-v070',
+    name: 'Berserker v0.7.0-dev Universal UCI Engine',
+    fileName: 'berserker-v0.7.0-cli.js',
+    category: 'windows',
+    size: '58.5 KB',
+    type: 'Universal Runtime (JS / Node / Bun)',
+    description: 'Generational leap featuring Threat-Space Prophylaxis Phase II, DAG Transposition Transduction, Strict Endgame Conversion Guarantee (Anti-Repetition Shield & Mate-in-1/2 fast path), BRnnue v0.7.0 Quad-Head Architecture (Value WDL, Attack Subnet, Harmony Subnet, Threat Predictor), and Adaptive FPU. Runs identically on Windows, Linux, macOS, and Android.',
+    sha256: '9f81a7b483c6d28e4091a0c8b20147e8140f821d374825ce90a1b63c870a6491',
+    downloadUrl: '/downloads/berserker-v0.7.0-cli.js',
+    recommendedFor: 'All Operating Systems (Universal)',
+    badge: 'v0.7.0 Dev Release'
+  },
+  {
     id: 'cli-standalone',
     name: 'Berserker v0.6.0 Universal UCI Engine',
     fileName: 'berserker-v0.6.0-cli.js',
     category: 'windows',
     size: '51.6 KB',
     type: 'Universal Runtime (JS / Node / Bun)',
-    description: 'Grandmaster core with Threat-Space Prophylaxis (The Petrosian Patch), Virtual Loss Parallel MCTS, Dynamic Time Manager, Berserker NNUE Dual Policy-Value Head, Progressive SEE Pruning, Syzygy Tablebase Probing, and Dynamic Contempt Profiling. Runs identically on Windows, Linux, macOS, and Android.',
+    description: 'Grandmaster core with Threat-Space Prophylaxis (The Petrosian Patch), Virtual Loss Parallel MCTS, Dynamic Time Manager, Berserker NNUE Dual Policy-Value Head, Progressive SEE Pruning, Syzygy Tablebase Probing, and Dynamic Contempt Profiling.',
     sha256: 'c834730fa053de415bdd3b0a7172a861b016e821d5e2192c885bc4de099b0fe2',
     downloadUrl: '/downloads/berserker-v0.6.0-cli.js',
     recommendedFor: 'All Operating Systems (Universal)',
-    badge: 'v0.6.0 Grandmaster Core'
+    badge: 'v0.6.0 Core'
   }
 ];
 
