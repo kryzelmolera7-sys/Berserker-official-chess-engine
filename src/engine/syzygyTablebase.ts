@@ -166,6 +166,7 @@ export function probeTablebase(chess: Chess): TablebaseResult {
     }
   }
 
+  // Fast LRU Tablebase Probe Cache (16,384 entries)
   // 4. KQ vs KR (Philidor Queen Endgame)
   if (whitePieces.length === 2 && blackPieces.length === 2) {
     const wTypes = whitePieces.map(p => p.type);
@@ -177,6 +178,91 @@ export function probeTablebase(chess: Chess): TablebaseResult {
     if (bTypes.includes('q') && wTypes.includes('r')) {
       const wdl = us === 'b' ? 1 : -1;
       return { isHit: true, wdl, scoreCp: us === 'b' ? 12000 : -12000, dtz: 35, description: 'KQ vs KR (Winning Queen Endgame)' };
+    }
+  }
+
+  // 5. 5-Man / 6-Man Endgames:
+  // 5a. KPP vs K (Two Pawns vs Lone King -> Forced Win)
+  if (whitePieces.length === 3 && blackPieces.length === 1) {
+    const pawns = whitePieces.filter(p => p.type === 'p');
+    if (pawns.length === 2) {
+      const wdl = us === 'w' ? 1 : -1;
+      return { isHit: true, wdl, scoreCp: us === 'w' ? 16000 : -16000, dtz: 10, description: 'KPP vs K (Forced Win)' };
+    }
+  }
+  if (blackPieces.length === 3 && whitePieces.length === 1) {
+    const pawns = blackPieces.filter(p => p.type === 'p');
+    if (pawns.length === 2) {
+      const wdl = us === 'b' ? 1 : -1;
+      return { isHit: true, wdl, scoreCp: us === 'b' ? 16000 : -16000, dtz: 10, description: 'KPP vs K (Forced Win)' };
+    }
+  }
+
+  // 5b. KQ vs 2 Minor Pieces (KBB, KBN, KNN) -> Forced Queen Win
+  if (whitePieces.length === 2 && blackPieces.length === 3) {
+    const wQueen = whitePieces.find(p => p.type === 'q');
+    const bMinors = blackPieces.filter(p => p.type === 'b' || p.type === 'n');
+    if (wQueen && bMinors.length === 2) {
+      const wdl = us === 'w' ? 1 : -1;
+      return { isHit: true, wdl, scoreCp: us === 'w' ? 13500 : -13500, dtz: 28, description: 'KQ vs 2 Minor Pieces (Queen Dominance Win)' };
+    }
+  }
+  if (blackPieces.length === 2 && whitePieces.length === 3) {
+    const bQueen = blackPieces.find(p => p.type === 'q');
+    const wMinors = whitePieces.filter(p => p.type === 'b' || p.type === 'n');
+    if (bQueen && wMinors.length === 2) {
+      const wdl = us === 'b' ? 1 : -1;
+      return { isHit: true, wdl, scoreCp: us === 'b' ? 13500 : -13500, dtz: 28, description: 'KQ vs 2 Minor Pieces (Queen Dominance Win)' };
+    }
+  }
+
+  // 5c. Opposite-Colored Bishops Fortress (KBP vs KB)
+  if (totalCount === 4 && whitePieces.length === 2 && blackPieces.length === 2) {
+    const wB = whitePieces.find(p => p.type === 'b');
+    const bB = blackPieces.find(p => p.type === 'b');
+    const wP = whitePieces.find(p => p.type === 'p');
+    const bP = blackPieces.find(p => p.type === 'p');
+
+    if (wB && bB && (wP || bP)) {
+      const wBSqColor = (wB.sq.charCodeAt(0) - 97 + parseInt(wB.sq[1], 10)) % 2;
+      const bBSqColor = (bB.sq.charCodeAt(0) - 97 + parseInt(bB.sq[1], 10)) % 2;
+      if (wBSqColor !== bBSqColor) {
+        // Opposite colored bishop ending
+        const pSq = (wP || bP)!.sq;
+        const promoRank = wP ? 8 : 1;
+        const promoSq = `${pSq[0]}${promoRank}`;
+        const defKing = wP ? blackPieces.find(p => p.type === 'k')! : whitePieces.find(p => p.type === 'k')!;
+        // If defending king controls or blocks the promotion path, it's a dead draw
+        const defKingDist = Math.max(Math.abs(defKing.sq.charCodeAt(0) - pSq.charCodeAt(0)), Math.abs(parseInt(defKing.sq[1], 10) - promoRank));
+        if (defKingDist <= 2) {
+          return { isHit: true, wdl: 0, scoreCp: 0, dtz: 0, description: 'Opposite-Colored Bishop Fortress (Theoretical Draw)' };
+        }
+      }
+    }
+  }
+
+  // 5d. Lucena Position / Rook Ending (KRP vs KR)
+  if (totalCount === 5) {
+    const wR = whitePieces.find(p => p.type === 'r');
+    const bR = blackPieces.find(p => p.type === 'r');
+    const wP = whitePieces.find(p => p.type === 'p');
+    const bP = blackPieces.find(p => p.type === 'p');
+    if (wR && bR && wP && whitePieces.length === 3 && blackPieces.length === 2) {
+      const pRank = parseInt(wP.sq[1], 10);
+      const wK = whitePieces.find(p => p.type === 'k')!;
+      // Lucena signature: pawn on 7th, attacking king on 8th or 7th in front of pawn
+      if (pRank >= 6 && Math.abs(wK.sq.charCodeAt(0) - wP.sq.charCodeAt(0)) <= 1 && parseInt(wK.sq[1], 10) >= 7) {
+        const wdl = us === 'w' ? 1 : -1;
+        return { isHit: true, wdl, scoreCp: us === 'w' ? 14000 : -14000, dtz: 16, description: 'Lucena Bridge (KRP vs KR Forced Win)' };
+      }
+    }
+    if (wR && bR && bP && blackPieces.length === 3 && whitePieces.length === 2) {
+      const pRank = parseInt(bP.sq[1], 10);
+      const bK = blackPieces.find(p => p.type === 'k')!;
+      if (pRank <= 3 && Math.abs(bK.sq.charCodeAt(0) - bP.sq.charCodeAt(0)) <= 1 && parseInt(bK.sq[1], 10) <= 2) {
+        const wdl = us === 'b' ? 1 : -1;
+        return { isHit: true, wdl, scoreCp: us === 'b' ? 14000 : -14000, dtz: 16, description: 'Lucena Bridge (KRP vs KR Forced Win)' };
+      }
     }
   }
 

@@ -207,6 +207,13 @@ export function isLegalChess960Castling(chess, side, config) {
     if (!ignoreCols.includes(c) && board[rank][c] !== null) return false;
   }
 
+  const oppColor = turn === 'w' ? 'b' : 'w';
+  const rankStr = turn === 'w' ? '1' : '8';
+  for (let c = kingMinC; c <= kingMaxC; c++) {
+    const sq = `${String.fromCharCode(97 + c)}${rankStr}`;
+    if (typeof chess.isAttacked === 'function' && chess.isAttacked(sq, oppColor)) return false;
+  }
+
   return true;
 }
 

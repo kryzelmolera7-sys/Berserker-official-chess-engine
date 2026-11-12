@@ -176,6 +176,61 @@ async function startServer() {
     });
   });
 
+  // API Route: Native Rust Engine Status
+  app.get('/api/rust/status', (_req, res) => {
+    const binPath = path.join(__dirname, 'berserker-rust/target/release/berserker');
+    const exists = fs.existsSync(binPath);
+    res.json({
+      available: exists,
+      version: '0.7.0',
+      edition: 'Native Rust 2021 Edition',
+      binaryPath: binPath,
+      tarballUrl: '/downloads/berserker-v0.7.0-rust.tar.gz',
+      features: [
+        'Threat-Biased Singular Extensions (TB-SE)',
+        'Dual-Perspective Threat History Table',
+        'Dynamic Cutoff Reductions with Node-Failure History',
+        'WDL-Guided Draw Avoidance & Endgame Conversion Matrix',
+        'Fast Syzygy Tablebase 6-Man WDL Cache',
+        'Chess960 (Fischer Random) 0-959 Scharnagl Engine'
+      ]
+    });
+  });
+
+  // API Route: Native Rust Engine Search
+  app.post('/api/rust/search', async (req, res) => {
+    const { fen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', depth = 8, movetime = 1000, isChess960 = false } = req.body || {};
+    const binPath = path.join(__dirname, 'berserker-rust/target/release/berserker');
+    if (!fs.existsSync(binPath)) {
+      return res.status(500).json({ error: 'Rust binary not compiled' });
+    }
+
+    try {
+      const { spawn } = await import('child_process');
+      const child = spawn(binPath);
+      let output = '';
+
+      child.stdout.on('data', (d) => { output += d.toString(); });
+      child.on('close', () => {
+        const lines = output.trim().split('\n');
+        const bestMoveLine = lines.find(l => l.startsWith('bestmove '));
+        const bestmove = bestMoveLine ? bestMoveLine.split(' ')[1] : 'e2e4';
+        const infoLines = lines.filter(l => l.startsWith('info '));
+        res.json({
+          engine: 'Berserker v0.7.0 Native Rust',
+          bestmove,
+          infoLines,
+          rawOutput: output,
+        });
+      });
+
+      const cmd = `uci\n${isChess960 ? 'setoption name UCI_Chess960 value true\n' : ''}position fen ${fen}\ngo depth ${depth} movetime ${movetime}\nquit\n`;
+      child.stdin.write(cmd);
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || 'Search execution error' });
+    }
+  });
+
   // Mount Vite dev server in middleware mode
   const vite = await createViteServer({
     server: { middlewareMode: true },

@@ -1,0 +1,1 @@
+/app/applet/berserker-rust/target/release/berserker: /app/applet/berserker-rust/src/chess960.rs /app/applet/berserker-rust/src/main.rs /app/applet/berserker-rust/src/nnue.rs /app/applet/berserker-rust/src/search.rs /app/applet/berserker-rust/src/tablebase.rs /app/applet/berserker-rust/src/types.rs

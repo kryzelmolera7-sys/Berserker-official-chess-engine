@@ -117,3 +117,60 @@ test('Standalone CLI: Chess960 functions match TypeScript implementation', () =>
   const cliNorm = cliNormalizeFen(shredder);
   assert.ok(cliNorm.normalizedFen.includes('w KQ'));
 });
+
+test('Chess960: Attack on transit squares strictly invalidates castling', async () => {
+  const { extractCastlingConfigFromFen, isLegalChess960Castling } = await import('../src/engine/chess960');
+  
+  // Position: White King on d1, Rooks on b1 and g1.
+  // Black pawn on g2 attacks f1 (transit square for king d1 -> g1).
+  const cPawnAttack = new Chess('1r1k4/8/8/8/8/8/6p1/1R1K2R1 w K - 0 1');
+  const canCastleThroughPawn = isLegalChess960Castling(cPawnAttack, 'kingside');
+  assert.equal(canCastleThroughPawn, false, 'Castling through pawn attack on transit square f1 must be illegal');
+
+  // Black rook on g8 attacks g1 (king landing square)
+  const cRookAttack = new Chess('1r1k2r1/8/8/8/8/8/8/1R1K2R1 w K - 0 1');
+  const canCastleIntoCheck = isLegalChess960Castling(cRookAttack, 'kingside');
+  assert.equal(canCastleIntoCheck, false, 'Castling into check on landing square g1 must be illegal');
+
+  // Once attack is resolved, castling becomes legal
+  const cSafe = new Chess('1r1k3r/8/8/8/8/8/8/1R1K2R1 w K - 0 1');
+  const canCastleSafe = isLegalChess960Castling(cSafe, 'kingside');
+  assert.equal(canCastleSafe, true, 'Castling must be legal when transit and landing squares are safe');
+});
+
+test('Chess960: getChess960LegalMoves generates FRC castling with King on c1/g1 and Rook on d1/f1', async () => {
+  const { getChess960LegalMoves, makeChess960Move, unmakeChess960Move } = await import('../src/engine/chess960');
+  
+  // White King on d1, Rooks on b1 and g1
+  const c = new Chess('1r1k3r/8/8/8/8/8/8/1R1K2R1 w KQkq - 0 1');
+  const moves = getChess960LegalMoves(c, true);
+
+  const ooMove = moves.find((m: any) => m.san === 'O-O');
+  assert.ok(ooMove, 'O-O move must be generated for Chess960');
+  assert.equal(ooMove.to, 'g1', 'King destination must be g1');
+
+  // Make move and check placement
+  const undo = makeChess960Move(c, ooMove);
+  assert.ok(c.fen().includes('1R3RK1'), `King on g1 and Rook on f1, got: ${c.fen()}`);
+
+  // Unmake move and verify restored state
+  unmakeChess960Move(c, undo);
+  assert.ok(c.fen().includes('1R1K2R1'), `Original position must be restored, got: ${c.fen()}`);
+});
+
+test('Chess960: extractCastlingConfigFromFen extracts rook and king files from Shredder and standard FENs', async () => {
+  const { extractCastlingConfigFromFen } = await import('../src/engine/chess960');
+
+  // SP 0: 'bbqnnrkr/pppppppp/8/8/8/8/PPPPPPPP/BBQNNRKR w HFhf - 0 1'
+  const cfg0 = extractCastlingConfigFromFen('bbqnnrkr/pppppppp/8/8/8/8/PPPPPPPP/BBQNNRKR w HFhf - 0 1');
+  assert.equal(cfg0.whiteKingFile, 6, 'SP0 white king on g1 (col 6)');
+  assert.equal(cfg0.whiteQueenRookFile, 5, 'SP0 white queen rook on f1 (col 5)');
+  assert.equal(cfg0.whiteKingRookFile, 7, 'SP0 white king rook on h1 (col 7)');
+
+  // Standard SP 518
+  const cfg518 = extractCastlingConfigFromFen('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
+  assert.equal(cfg518.whiteKingFile, 4, 'SP518 white king on e1 (col 4)');
+  assert.equal(cfg518.whiteQueenRookFile, 0, 'SP518 white queen rook on a1 (col 0)');
+  assert.equal(cfg518.whiteKingRookFile, 7, 'SP518 white king rook on h1 (col 7)');
+});
+

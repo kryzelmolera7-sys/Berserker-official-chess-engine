@@ -219,26 +219,102 @@ function areSquaresEmpty(board: ({ type: string; color: string } | null)[][], ro
 }
 
 /**
- * Checks if a square is attacked by the opponent.
+ * Accurately extracts Chess960 castling configuration from any FEN string
+ * (supports both Shredder-FEN file letters and standard FEN backranks).
  */
-function isSquareAttacked(chess: Chess, square: string, byColor: 'w' | 'b'): boolean {
-  const moves = chess.moves({ verbose: true });
-  // To check if square is attacked, test if opponent can move to this square
-  const testFenParts = chess.fen().split(' ');
-  const ourColor = testFenParts[1] as 'w' | 'b';
-  if (ourColor === byColor) {
-    return moves.some(m => m.to === square);
+export function extractCastlingConfigFromFen(rawFen: string): Chess960CastlingConfig {
+  const parts = rawFen.trim().split(/\s+/);
+  const placement = parts[0] || '';
+  const castling = parts[2] || '-';
+  const ranks = placement.split('/');
+
+  let whiteKingFile = -1;
+  let whiteQueenRookFile = -1;
+  let whiteKingRookFile = -1;
+  let blackKingFile = -1;
+  let blackQueenRookFile = -1;
+  let blackKingRookFile = -1;
+
+  // 1. Check for Shredder-FEN castling file letters
+  const whiteFiles = castling.match(/[A-H]/g);
+  if (whiteFiles && whiteFiles.length > 0) {
+    const fileNums = whiteFiles.map(ch => ch.charCodeAt(0) - 65).sort((a, b) => a - b);
+    if (fileNums.length >= 2) {
+      whiteQueenRookFile = fileNums[0];
+      whiteKingRookFile = fileNums[fileNums.length - 1];
+    } else {
+      whiteKingRookFile = fileNums[0];
+    }
   }
 
-  // Swap turn temporarily to test opponent moves
-  testFenParts[1] = byColor;
-  try {
-    const oppChess = new Chess(testFenParts.join(' '));
-    const oppMoves = oppChess.moves({ verbose: true });
-    return oppMoves.some(m => m.to === square);
-  } catch {
-    return false;
+  const blackFiles = castling.match(/[a-h]/g);
+  if (blackFiles && blackFiles.length > 0) {
+    const fileNums = blackFiles.map(ch => ch.charCodeAt(0) - 97).sort((a, b) => a - b);
+    if (fileNums.length >= 2) {
+      blackQueenRookFile = fileNums[0];
+      blackKingRookFile = fileNums[fileNums.length - 1];
+    } else {
+      blackKingRookFile = fileNums[0];
+    }
   }
+
+  // 2. Scan rank 1 (row 7) for White pieces
+  const rank1 = ranks[7] || '';
+  let col = 0;
+  for (const ch of rank1) {
+    if (/\d/.test(ch)) {
+      col += parseInt(ch, 10);
+    } else {
+      if (ch === 'K') whiteKingFile = col;
+      if (ch === 'R') {
+        if (whiteQueenRookFile === -1 && (whiteKingFile === -1 || col < whiteKingFile)) {
+          whiteQueenRookFile = col;
+        } else if (whiteKingFile !== -1 && col > whiteKingFile) {
+          whiteKingRookFile = col;
+        }
+      }
+      col++;
+    }
+  }
+
+  // 3. Scan rank 8 (row 0) for Black pieces
+  const rank8 = ranks[0] || '';
+  col = 0;
+  for (const ch of rank8) {
+    if (/\d/.test(ch)) {
+      col += parseInt(ch, 10);
+    } else {
+      if (ch === 'k') blackKingFile = col;
+      if (ch === 'r') {
+        if (blackQueenRookFile === -1 && (blackKingFile === -1 || col < blackKingFile)) {
+          blackQueenRookFile = col;
+        } else if (blackKingFile !== -1 && col > blackKingFile) {
+          blackKingRookFile = col;
+        }
+      }
+      col++;
+    }
+  }
+
+  return {
+    whiteKingFile: whiteKingFile !== -1 ? whiteKingFile : 4,
+    whiteQueenRookFile: whiteQueenRookFile !== -1 ? whiteQueenRookFile : 0,
+    whiteKingRookFile: whiteKingRookFile !== -1 ? whiteKingRookFile : 7,
+    blackKingFile: blackKingFile !== -1 ? blackKingFile : 4,
+    blackQueenRookFile: blackQueenRookFile !== -1 ? blackQueenRookFile : 0,
+    blackKingRookFile: blackKingRookFile !== -1 ? blackKingRookFile : 7,
+  };
+}
+
+/**
+ * Checks if a square is attacked by the opponent using chess.js's native isAttacked.
+ */
+function isSquareAttacked(chess: Chess, square: string, byColor: 'w' | 'b'): boolean {
+  if (typeof (chess as any).isAttacked === 'function') {
+    return (chess as any).isAttacked(square, byColor);
+  }
+  const moves = chess.moves({ verbose: true });
+  return moves.some(m => m.to === square);
 }
 
 /**
@@ -250,6 +326,7 @@ export function isLegalChess960Castling(
   config?: Chess960CastlingConfig
 ): boolean {
   if (chess.inCheck()) return false;
+  const effectiveConfig = config || extractCastlingConfigFromFen(chess.fen());
 
   const fen = chess.fen();
   const parts = fen.split(' ');
@@ -280,10 +357,10 @@ export function isLegalChess960Castling(
 
   if (kingCol === -1) return false;
 
-  if (config) {
+  if (effectiveConfig) {
     targetRookCol = turn === 'w'
-      ? (side === 'kingside' ? config.whiteKingRookFile : config.whiteQueenRookFile)
-      : (side === 'kingside' ? config.blackKingRookFile : config.blackQueenRookFile);
+      ? (side === 'kingside' ? effectiveConfig.whiteKingRookFile : effectiveConfig.whiteQueenRookFile)
+      : (side === 'kingside' ? effectiveConfig.blackKingRookFile : effectiveConfig.blackQueenRookFile);
   } else {
     // Detect rooks on current rank
     if (side === 'kingside') {
@@ -370,11 +447,12 @@ export function executeChess960Castling(
     if (p && p.color === turn && p.type === 'k') kingCol = c;
   }
 
+  const effectiveConfig = config || extractCastlingConfigFromFen(chess.fen());
   let rookCol = -1;
-  if (config) {
+  if (effectiveConfig) {
     rookCol = turn === 'w'
-      ? (side === 'kingside' ? config.whiteKingRookFile : config.whiteQueenRookFile)
-      : (side === 'kingside' ? config.blackKingRookFile : config.blackQueenRookFile);
+      ? (side === 'kingside' ? effectiveConfig.whiteKingRookFile : effectiveConfig.whiteQueenRookFile)
+      : (side === 'kingside' ? effectiveConfig.blackKingRookFile : effectiveConfig.blackQueenRookFile);
   } else {
     if (side === 'kingside') {
       for (let c = kingCol + 1; c < 8; c++) {
@@ -511,3 +589,112 @@ function sideMatchesTarget(side: 'kingside' | 'queenside' | null, col: number): 
   if (!side) return false;
   return (side === 'kingside' && col === 6) || (side === 'queenside' && col === 2);
 }
+
+/**
+ * Returns all legal moves for a Chess960 (or standard) position.
+ * When isChess960 is active, filters out any invalid standard chess.js castling moves
+ * and injects authentic FRC castling moves (King on c1/g1, Rook on d1/f1).
+ */
+export function getChess960LegalMoves(
+  chess: Chess,
+  isChess960: boolean,
+  config?: Chess960CastlingConfig
+): any[] {
+  const rawMoves = chess.moves({ verbose: true });
+  if (!isChess960) return rawMoves;
+
+  // Filter out chess.js's built-in standard castling which assumes King is on e1/e8 and Rooks on a1/h1
+  const filtered = rawMoves.filter(m => !m.flags.includes('k') && !m.flags.includes('q'));
+  const turn = chess.turn();
+  const board = chess.board();
+  const row = turn === 'w' ? 7 : 0;
+  const rankStr = turn === 'w' ? '1' : '8';
+
+  let kingCol = -1;
+  for (let c = 0; c < 8; c++) {
+    const p = board[row][c];
+    if (p && p.type === 'k' && p.color === turn) {
+      kingCol = c;
+      break;
+    }
+  }
+
+  if (kingCol === -1) return filtered;
+
+  const kingSq = `${String.fromCharCode(97 + kingCol)}${rankStr}`;
+
+  // Kingside castling (O-O) -> King to g1/g8, Rook to f1/f8
+  if (isLegalChess960Castling(chess, 'kingside', config)) {
+    const destKingSq = `g${rankStr}`;
+    filtered.push({
+      color: turn,
+      from: kingSq as any,
+      to: destKingSq as any,
+      piece: 'k',
+      captured: undefined,
+      promotion: undefined,
+      flags: 'k',
+      san: 'O-O',
+      lan: `${kingSq}${destKingSq}`,
+      before: chess.fen(),
+      after: '',
+      isChess960Castling: true,
+      castlingSide: 'kingside',
+    } as any);
+  }
+
+  // Queenside castling (O-O-O) -> King to c1/c8, Rook to d1/d8
+  if (isLegalChess960Castling(chess, 'queenside', config)) {
+    const destKingSq = `c${rankStr}`;
+    filtered.push({
+      color: turn,
+      from: kingSq as any,
+      to: destKingSq as any,
+      piece: 'k',
+      captured: undefined,
+      promotion: undefined,
+      flags: 'q',
+      san: 'O-O-O',
+      lan: `${kingSq}${destKingSq}`,
+      before: chess.fen(),
+      after: '',
+      isChess960Castling: true,
+      castlingSide: 'queenside',
+    } as any);
+  }
+
+  return filtered;
+}
+
+/**
+ * Executes a move on the board, handling Chess960 castling correctly.
+ * Returns an undo record for unmakeChess960Move.
+ */
+export function makeChess960Move(
+  chess: Chess,
+  move: any,
+  config?: Chess960CastlingConfig
+): { undoFen: string | null } {
+  if (move.isChess960Castling && move.castlingSide) {
+    const undoFen = chess.fen();
+    executeChess960Castling(chess, move.castlingSide, config);
+    return { undoFen };
+  }
+  chess.move(move);
+  return { undoFen: null };
+}
+
+/**
+ * Restores previous board state after makeChess960Move.
+ */
+export function unmakeChess960Move(
+  chess: Chess,
+  undoRecord: { undoFen: string | null }
+): void {
+  if (undoRecord.undoFen) {
+    chess.load(undoRecord.undoFen);
+  } else {
+    chess.undo();
+  }
+}
+

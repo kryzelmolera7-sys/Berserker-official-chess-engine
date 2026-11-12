@@ -218,6 +218,11 @@ function scoreMoveForOrdering(
     if (killerMoves[ply][1] === uci) return 40000;
   }
 
+  // Castling Priority: King safety and rook activation are paramount (especially in Chess960)
+  if (move.san === 'O-O' || move.san === 'O-O-O' || (move as any).isChess960Castling) {
+    return 45000;
+  }
+
   // Continuation History (Conthist)
   let conthistBonus = 0;
   if (lastMove) {
@@ -392,7 +397,7 @@ function pvsSearch(
 
   // 1. Reverse Futility Pruning (RFP / Static Null Move Pruning) with Improving Heuristic
   if (depth <= 6 && !inCheck && !isRoot && Math.abs(beta) < 9000) {
-    const rfpMargin = depth * (improving ? 85 : 65);
+    const rfpMargin = depth * (improving ? 75 : 60);
     if (staticEval - rfpMargin >= beta) {
       return staticEval;
     }
@@ -400,7 +405,7 @@ function pvsSearch(
 
   // 1b. Razoring (Depth 1-3): If static eval is hopelessly below alpha, verify with Q-Search
   if (depth <= 3 && !inCheck && !isRoot && Math.abs(alpha) < 9000) {
-    const razorMargin = 380 + depth * 110;
+    const razorMargin = 260 + depth * 85;
     if (staticEval + razorMargin <= alpha) {
       const qScore = quiescenceSearch(chess, alpha, alpha + 1, 0, 4, stats);
       if (qScore <= alpha) {
@@ -520,16 +525,18 @@ function pvsSearch(
   let movesSearched = 0;
 
   for (const move of moves) {
+    const isCastling = move.san === 'O-O' || move.san === 'O-O-O' || (move as any).isChess960Castling;
+
     // 7. Late Move Pruning (LMP): Prune unpromising quiet moves after searching threshold moves
     if (depth <= 4 && !inCheck && !isRoot && movesSearched >= (3 + 3 * depth * depth)) {
-      if (!move.captured && !move.san.includes('+')) {
+      if (!move.captured && !move.san.includes('+') && !isCastling) {
         continue;
       }
     }
 
     // 8. Futility Pruning: At shallow depths, skip unpromising quiet moves that cannot beat alpha
     if (depth <= 2 && !inCheck && !isRoot && Math.abs(alpha) < 9000) {
-      if (!move.captured && !move.san.includes('+')) {
+      if (!move.captured && !move.san.includes('+') && !isCastling) {
         if (staticEval + 120 * depth <= alpha) {
           continue;
         }
@@ -554,7 +561,7 @@ function pvsSearch(
     } else {
       // Dynamic Late Move Reductions (LMR) with History Dampening, Check Immunity & Improving Heuristic
       let reduction = 0;
-      if (depth >= 3 && movesSearched >= 3 && !move.captured && !move.promotion && !inCheck) {
+      if (depth >= 3 && movesSearched >= 3 && !move.captured && !move.promotion && !isCastling && !inCheck) {
         reduction = 1 + Math.floor(Math.log(depth) * Math.log(movesSearched) / 2.1);
         if (improving) reduction -= 1;
         else reduction += 1;

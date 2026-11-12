@@ -22,6 +22,8 @@ import {
   resolveChess960Move, 
   executeChess960Castling, 
   extractCastlingConfig, 
+  extractCastlingConfigFromFen,
+  getChess960LegalMoves,
   Chess960CastlingConfig 
 } from './chess960';
 
@@ -216,6 +218,11 @@ function scoreMove(
   if (ply < 64) {
     if (killerMoves[ply][0] === uci) return 50000;
     if (killerMoves[ply][1] === uci) return 40000;
+  }
+
+  // Castling Priority: King safety and rapid rook activation (vital for Chess960)
+  if (move.san === 'O-O' || move.san === 'O-O-O' || move.isChess960Castling) {
+    return 45000;
   }
 
   // Continuation History (Conthist)
@@ -498,16 +505,17 @@ function pvsSearch(
     const uci = `${move.from}${move.to}${move.promotion || ''}`;
     const isCapture = !!move.captured;
     const isPromotion = !!move.promotion;
+    const isCastling = move.san === 'O-O' || move.san === 'O-O-O' || (move as any).isChess960Castling;
 
     // 8. Late Move Pruning (LMP)
     if (depth <= 4 && !inCheck && !isRoot && movesSearched >= (3 + 3 * depth * depth)) {
-      if (!isCapture && !isPromotion && !chess.inCheck()) {
+      if (!isCapture && !isPromotion && !isCastling && !chess.inCheck()) {
         continue;
       }
     }
 
     // Futility prune quiet moves that cannot beat alpha
-    if (canFutilityPrune && movesSearched > 0 && !isCapture && !isPromotion && !chess.inCheck()) {
+    if (canFutilityPrune && movesSearched > 0 && !isCapture && !isPromotion && !isCastling && !chess.inCheck()) {
       continue;
     }
 
@@ -523,7 +531,7 @@ function pvsSearch(
     } else {
       // Dynamic Late Move Reductions (LMR) with History Dampening & Check Immunity
       let reduction = 0;
-      if (depth >= 3 && movesSearched >= 3 && !isCapture && !isPromotion && !inCheck && !chess.inCheck()) {
+      if (depth >= 3 && movesSearched >= 3 && !isCapture && !isPromotion && !isCastling && !inCheck && !chess.inCheck()) {
         reduction = 1 + Math.floor(Math.log(depth) * Math.log(movesSearched) / 2.1);
 
         // History Dampening
@@ -657,7 +665,9 @@ function executeRootSearch(targetDepth = 12, maxTimeMs = 3000) {
   stopRequested = false;
   const startTime = Date.now();
 
-  const moves = currentChess.moves({ verbose: true });
+  const moves = uciChess960 
+    ? getChess960LegalMoves(currentChess, true, currentChess960Config) 
+    : currentChess.moves({ verbose: true });
   if (moves.length === 0) {
     isSearching = false;
     self.postMessage('bestmove 0000');
@@ -908,8 +918,7 @@ self.onmessage = function (event) {
         const { normalizedFen } = normalizeChess960Fen(rawFen);
         try {
           currentChess = new Chess(normalizedFen);
-          const backrank = normalizedFen.split('/')[7]?.split(' ')[0] || 'RNBQKBNR';
-          currentChess960Config = extractCastlingConfig(backrank);
+          currentChess960Config = extractCastlingConfigFromFen(rawFen);
           gameHistoryFens.push(currentChess.fen().split(' ').slice(0, 4).join(' '));
           if (movesIdx !== -1) {
             for (let i = movesIdx + 1; i < parts.length; i++) {

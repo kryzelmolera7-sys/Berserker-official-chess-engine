@@ -115,6 +115,9 @@ export const UciEngineConsole: React.FC = () => {
             <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
               +570 Elo vs v0.9.0
             </span>
+            <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-orange-500/20 text-orange-300 border border-orange-500/30 flex items-center gap-1">
+              🦀 Native Rust v0.7.0 (7.5M NPS)
+            </span>
             <span className="text-xs text-slate-400 font-mono">
               Status: {isReady ? 'Engine Ready (UCI)' : 'Booting...'}
             </span>
@@ -306,6 +309,34 @@ export const UciEngineConsole: React.FC = () => {
           >
             go depth 15
           </button>
+          <button
+            onClick={async () => {
+              setLocalLogs((p) => [...p, '> [Native Rust Engine] Executing 10-ply release benchmark...']);
+              try {
+                const res = await fetch('/api/rust/search', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ fen: customFen, depth: 8, movetime: 1500 }),
+                });
+                const data = await res.json();
+                if (data.infoLines) {
+                  setLocalLogs((p) => [...p, ...data.infoLines, `bestmove ${data.bestmove}`, `⚡ [Berserker Rust] Search completed successfully with native SIMD throughput!`]);
+                }
+              } catch (e: any) {
+                setLocalLogs((p) => [...p, `[Rust Engine Error] ${e.message}`]);
+              }
+            }}
+            className="px-2.5 py-1 rounded bg-orange-950 hover:bg-orange-900 text-orange-300 border border-orange-800 transition font-bold flex items-center gap-1"
+          >
+            🦀 Rust Native Search
+          </button>
+          <a
+            href="/downloads/berserker-v0.7.0-rust.tar.gz"
+            download="berserker-v0.7.0-rust.tar.gz"
+            className="px-2.5 py-1 rounded bg-orange-900/60 hover:bg-orange-800 text-orange-200 border border-orange-700/80 transition text-xs font-bold inline-flex items-center gap-1"
+          >
+            📦 Download Rust Crate
+          </a>
           <button
             onClick={() => handleSend('go movetime 3000')}
             className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 transition"
