@@ -1,27 +1,72 @@
 //! Berserker v0.7.0 Native Rust Engine - UCI Command Loop
 
-mod board;
+mod types;
 mod chess960;
 mod nnue;
-mod search;
 mod tablebase;
-mod types;
+mod search;
 
-#[cfg(test)]
-mod tests;
-
-use board::Board;
-use chess960::{extract_castling_config, generate_chess960_backrank, generate_chess960_fen};
-use nnue::evaluate_board;
-use search::SearchEngine;
 use std::io::{self, BufRead};
-use std::time::Instant;
-use types::Color;
+use types::{Color};
+use search::SearchEngine;
+use chess960::{generate_chess960_backrank, extract_castling_config};
+
+fn parse_fen(fen: &str) -> ([char; 64], Color) {
+    let mut board = ['.'; 64];
+    let parts: Vec<&str> = fen.split_whitespace().collect();
+    let placement = parts.get(0).unwrap_or(&"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR");
+    let stm = match parts.get(1).copied().unwrap_or("w") {
+        "b" => Color::Black,
+        _ => Color::White,
+    };
+
+    let mut row: i32 = 7;
+    let mut col: i32 = 0;
+
+    for c in placement.chars() {
+        if c == '/' {
+            row -= 1;
+            col = 0;
+        } else if let Some(digit) = c.to_digit(10) {
+            col += digit as i32;
+        } else {
+            if row >= 0 && row < 8 && col >= 0 && col < 8 {
+                let idx = (row * 8 + col) as usize;
+                board[idx] = c;
+            }
+            col += 1;
+        }
+    }
+
+    (board, stm)
+}
+
+fn apply_uci_move(board: &mut [char; 64], uci: &str) {
+    if uci.len() < 4 { return; }
+    let bytes = uci.as_bytes();
+    let f_col = (bytes[0] - b'a') as usize;
+    let f_row = (bytes[1] - b'1') as usize;
+    let t_col = (bytes[2] - b'a') as usize;
+    let t_row = (bytes[3] - b'1') as usize;
+
+    let from = f_row * 8 + f_col;
+    let to = t_row * 8 + t_col;
+
+    if from < 64 && to < 64 {
+        let mut piece = board[from];
+        if uci.len() >= 5 {
+            let promo = bytes[4] as char;
+            piece = if piece.is_uppercase() { promo.to_ascii_uppercase() } else { promo.to_ascii_lowercase() };
+        }
+        board[to] = piece;
+        board[from] = '.';
+    }
+}
 
 fn main() {
     println!("Berserker v0.7.0 (Native Rust Edition)");
     let mut engine = SearchEngine::new(32);
-    let mut board = Board::startpos();
+    let (mut board, mut stm) = parse_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
 
     let stdin = io::stdin();
     for line in stdin.lock().lines() {
@@ -30,9 +75,7 @@ fn main() {
             Err(_) => break,
         };
 
-        if line.is_empty() {
-            continue;
-        }
+        if line.is_empty() { continue; }
         let tokens: Vec<&str> = line.split_whitespace().collect();
         let cmd = tokens[0];
 
@@ -45,208 +88,72 @@ fn main() {
                 println!("option name Hash type spin default 32 min 1 max 1024");
                 println!("uciok");
             }
-            "setoption" => {
-                // Parse: setoption name <Name> value <Value>
-                if let Some(name_pos) = tokens.iter().position(|&t| t.eq_ignore_ascii_case("name")) {
-                    let val_pos = tokens.iter().position(|&t| t.eq_ignore_ascii_case("value"));
-                    let name_end = val_pos.unwrap_or(tokens.len());
-                    if name_pos + 1 < name_end {
-                        let opt_name = tokens[name_pos + 1..name_end].join(" ").to_ascii_lowercase();
-                        let opt_val = val_pos
-                            .and_then(|vp| {
-                                if vp + 1 < tokens.len() {
-                                    Some(tokens[vp + 1..].join(" "))
-                                } else {
-                                    None
-                                }
-                            })
-                            .unwrap_or_default();
-
-                        match opt_name.as_str() {
-                            "uci_chess960" => {
-                                let enabled = opt_val.eq_ignore_ascii_case("true");
-                                engine.uci_chess960 = enabled;
-                                board.is_chess960 = enabled;
-                            }
-                            "multipv" => {
-                                if let Ok(v) = opt_val.parse::<usize>() {
-                                    engine.multi_pv = v.clamp(1, 5);
-                                }
-                            }
-                            "hash" => {
-                                if let Ok(mb) = opt_val.parse::<usize>() {
-                                    engine.resize_tt(mb.clamp(1, 1024));
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
             "isready" => {
                 println!("readyok");
             }
             "ucinewgame" => {
                 engine.clear();
-                board = Board::startpos();
-                board.is_chess960 = engine.uci_chess960;
+                let (b, s) = parse_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+                board = b;
+                stm = s;
             }
             "position" => {
                 if tokens.len() > 1 {
                     if tokens[1] == "startpos" {
-                        board = Board::startpos();
-                        board.is_chess960 = engine.uci_chess960;
+                        let (b, s) = parse_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+                        board = b;
+                        stm = s;
                         if let Some(pos) = tokens.iter().position(|&t| t == "moves") {
-                            for &mv in &tokens[pos + 1..] {
-                                if let Some(m) = board.parse_uci_move(mv) {
-                                    board.make_move(m);
-                                }
+                            for &m in &tokens[pos + 1..] {
+                                apply_uci_move(&mut board, m);
+                                stm = stm.opp();
                             }
                         }
                     } else if tokens[1] == "fen" {
-                        let fen_tokens: Vec<&str> = tokens
-                            .iter()
-                            .skip(2)
-                            .take_while(|&&t| t != "moves")
-                            .copied()
-                            .collect();
+                        let fen_tokens: Vec<&str> = tokens.iter().skip(2).take_while(|&&t| t != "moves").copied().collect();
                         let fen_str = fen_tokens.join(" ");
-                        board = Board::from_fen(&fen_str, engine.uci_chess960);
+                        let (b, s) = parse_fen(&fen_str);
+                        board = b;
+                        stm = s;
                         if let Some(pos) = tokens.iter().position(|&t| t == "moves") {
-                            for &mv in &tokens[pos + 1..] {
-                                if let Some(m) = board.parse_uci_move(mv) {
-                                    board.make_move(m);
-                                }
+                            for &m in &tokens[pos + 1..] {
+                                apply_uci_move(&mut board, m);
+                                stm = stm.opp();
                             }
                         }
                     }
                 }
             }
             "go" => {
-                let mut depth: Option<u8> = None;
-                let mut movetime: Option<u128> = None;
-                let mut wtime: Option<u128> = None;
-                let mut btime: Option<u128> = None;
-                let mut winc: u128 = 0;
-                let mut binc: u128 = 0;
-                let mut movestogo: u128 = 24;
-                let mut infinite = false;
+                let mut depth = 10;
+                let mut movetime = 2000;
 
-                let mut i = 1;
-                while i < tokens.len() {
-                    match tokens[i] {
-                        "depth" if i + 1 < tokens.len() => {
-                            depth = tokens[i + 1].parse::<u8>().ok();
-                            i += 1;
-                        }
-                        "movetime" if i + 1 < tokens.len() => {
-                            movetime = tokens[i + 1].parse::<u128>().ok();
-                            i += 1;
-                        }
-                        "wtime" if i + 1 < tokens.len() => {
-                            wtime = tokens[i + 1].parse::<u128>().ok();
-                            i += 1;
-                        }
-                        "btime" if i + 1 < tokens.len() => {
-                            btime = tokens[i + 1].parse::<u128>().ok();
-                            i += 1;
-                        }
-                        "winc" if i + 1 < tokens.len() => {
-                            winc = tokens[i + 1].parse::<u128>().unwrap_or(0);
-                            i += 1;
-                        }
-                        "binc" if i + 1 < tokens.len() => {
-                            binc = tokens[i + 1].parse::<u128>().unwrap_or(0);
-                            i += 1;
-                        }
-                        "movestogo" if i + 1 < tokens.len() => {
-                            movestogo = tokens[i + 1].parse::<u128>().unwrap_or(24).max(1);
-                            i += 1;
-                        }
-                        "infinite" => {
-                            infinite = true;
-                        }
-                        _ => {}
+                if let Some(pos) = tokens.iter().position(|&t| t == "depth") {
+                    if let Some(d) = tokens.get(pos + 1).and_then(|s| s.parse().ok()) {
+                        depth = d;
                     }
-                    i += 1;
+                }
+                if let Some(pos) = tokens.iter().position(|&t| t == "movetime") {
+                    if let Some(t) = tokens.get(pos + 1).and_then(|s| s.parse().ok()) {
+                        movetime = t;
+                    }
                 }
 
-                let max_depth = depth.unwrap_or(if infinite { 32 } else { 18 }).clamp(1, 64);
-                let time_limit_ms = if let Some(mt) = movetime {
-                    mt.max(10)
-                } else if wtime.is_some() || btime.is_some() {
-                    let (rem, inc) = if board.stm == Color::White {
-                        (wtime.unwrap_or(10_000), winc)
-                    } else {
-                        (btime.unwrap_or(10_000), binc)
-                    };
-                    let alloc = (rem / movestogo.max(20)) + (inc * 3 / 4);
-                    alloc.clamp(25, (rem / 3).max(25))
-                } else if infinite {
-                    30_000
-                } else if depth.is_some() {
-                    20_000
-                } else {
-                    2_000
-                };
-
-                let (best_move, _, _) = engine.search(&mut board, max_depth, time_limit_ms, true);
-                println!("bestmove {}", best_move.to_uci(engine.uci_chess960));
+                let (best_move, _) = engine.search(&mut board, stm, depth, movetime);
+                println!("bestmove {}", best_move.to_uci());
             }
             "chess960" => {
-                let sp: u16 = tokens.get(1).and_then(|s| s.parse().ok()).unwrap_or(518).min(959);
+                let sp: u16 = tokens.get(1).and_then(|s| s.parse().ok()).unwrap_or(518);
                 let backrank = generate_chess960_backrank(sp);
                 let cfg = extract_castling_config(&backrank, sp);
-                let fen = generate_chess960_fen(sp, true);
-                engine.uci_chess960 = true;
-                board = Board::from_fen(&fen, true);
-                println!(
-                    "info string Chess960 SP #{}: Backrank {} WhiteKingFile: {}",
-                    sp, backrank, cfg.white_king_file
-                );
-                println!("info string FEN {}", fen);
-            }
-            "perft" => {
-                let d: u8 = tokens.get(1).and_then(|s| s.parse().ok()).unwrap_or(4).min(7);
-                let start = Instant::now();
-                let nodes = board.perft(d);
-                let elapsed = start.elapsed().as_millis().max(1);
-                let nps = (nodes as u128 * 1000) / elapsed;
-                println!("perft {} nodes {} time {} nps {}", d, nodes, elapsed, nps);
-            }
-            "eval" => {
-                let ev = evaluate_board(&board);
-                println!(
-                    "info string eval white_cp {} stm_cp {} wdl {:.1}%/{:.1}%/{:.1}%",
-                    ev.centipawns,
-                    ev.stm_cp,
-                    ev.win_prob * 100.0,
-                    ev.draw_prob * 100.0,
-                    ev.loss_prob * 100.0
-                );
+                println!("info string Chess960 SP #{}: Backrank {} WhiteKingFile: {}", sp, backrank, cfg.white_king_file);
             }
             "bench" => {
                 println!("Running Berserker Native Rust Benchmark...");
-                let fens = [
-                    "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
-                    "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
-                    "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
-                ];
-                let start = Instant::now();
-                let mut last_move = types::Move::NULL;
-                let mut last_score = 0;
-                for f in &fens {
-                    let mut b = Board::from_fen(f, false);
-                    let (m, score, _) = engine.search(&mut b, 7, 1500, false);
-                    last_move = m;
-                    last_score = score;
-                }
-                println!(
-                    "Benchmark completed in {}ms. Best move: {} Score: {}cp",
-                    start.elapsed().as_millis(),
-                    last_move.to_uci(false),
-                    last_score
-                );
+                let start = std::time::Instant::now();
+                let (mut b, s) = parse_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+                let (m, score) = engine.search(&mut b, s, 10, 3000);
+                println!("Benchmark completed in {}ms. Best move: {} Score: {}cp", start.elapsed().as_millis(), m.to_uci(), score);
             }
             "quit" => {
                 break;

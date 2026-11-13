@@ -21,7 +21,7 @@ interface DownloadItem {
   id: string;
   name: string;
   fileName: string;
-  category: 'rust' | 'windows' | 'linux' | 'macos' | 'android' | 'nnue' | 'cpp' | 'gui';
+  category: 'windows' | 'linux' | 'macos' | 'android' | 'nnue' | 'cpp' | 'gui';
   size: string;
   type: string;
   description: string;
@@ -32,20 +32,6 @@ interface DownloadItem {
 }
 
 const DOWNLOAD_ITEMS: DownloadItem[] = [
-  // Native Rust v0.7.0 Edition
-  {
-    id: 'rust-v070-crate',
-    name: 'Berserker v0.7.0 Native Rust Crate (Bitboard PVS)',
-    fileName: 'berserker-v0.7.0-rust.tar.gz',
-    category: 'rust',
-    size: '27.0 KB',
-    type: 'Rust 2021 Cargo Crate (.tar.gz)',
-    description: 'Zero-dependency Native Rust 2021 UCI & Chess960 engine. Features bitboard legal move gen (24M+ perft NPS), Threat-Biased & Double Singular Extensions, Petrosian Prophylaxis, Continuation/Capture/Correction History, Tapered PeSTO + SCReLU NNUE eval, Syzygy TB probing, and Multi-PV 1..5.',
-    sha256: '0e23f8fd44f5e47bcdec3782cf4cf910ef967240187450b80b6b1516a0dce748',
-    downloadUrl: '/downloads/berserker-v0.7.0-rust.tar.gz',
-    recommendedFor: 'Maximum Native Speed (cargo build --release)',
-    badge: 'Rust v0.7.0 New'
-  },
   // Expanded NNUE Nets
   {
     id: 'nnue-huge',
@@ -402,7 +388,7 @@ const DOWNLOAD_ITEMS: DownloadItem[] = [
 ];
 
 export const BerserkerReleaseDownloads: React.FC = () => {
-  const [selectedCategory, setSelectedCategory] = useState<'all' | 'rust' | 'windows' | 'linux' | 'macos' | 'android' | 'nnue' | 'cpp' | 'gui'>('all');
+  const [selectedCategory, setSelectedCategory] = useState<'all' | 'windows' | 'linux' | 'macos' | 'android' | 'nnue' | 'cpp' | 'gui'>('all');
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const handleCopy = (id: string, text: string) => {
@@ -507,8 +493,7 @@ export const BerserkerReleaseDownloads: React.FC = () => {
       {/* Category Navigation */}
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 pb-3">
         {[
-          { key: 'all', label: `All Files (${DOWNLOAD_ITEMS.length})`, icon: Boxes },
-          { key: 'rust', label: 'Native Rust v0.7.0', icon: Cpu },
+          { key: 'all', label: 'All Files (28)', icon: Boxes },
           { key: 'nnue', label: 'Expanded NNUE (68.5M / 45.3M)', icon: Layers },
           { key: 'windows', label: 'Windows (AVX2/Modern/ARM)', icon: Laptop },
           { key: 'linux', label: 'Linux (AVX2/Modern/ARM)', icon: Terminal },

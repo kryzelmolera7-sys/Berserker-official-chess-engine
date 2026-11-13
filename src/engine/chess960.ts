@@ -117,14 +117,8 @@ export function extractCastlingConfig(backrank: string): Chess960CastlingConfig 
   let queenRookFile = -1;
   let kingRookFile = -1;
 
-  let c = 0;
-  for (let i = 0; i < backrank.length && c < 8; i++) {
-    const ch = backrank[i];
-    if (ch >= '1' && ch <= '8') {
-      c += parseInt(ch, 10);
-      continue;
-    }
-    const piece = ch.toUpperCase();
+  for (let c = 0; c < 8; c++) {
+    const piece = backrank[c].toUpperCase();
     if (piece === 'R') {
       if (kingFile === -1) {
         queenRookFile = c;
@@ -134,7 +128,6 @@ export function extractCastlingConfig(backrank: string): Chess960CastlingConfig 
     } else if (piece === 'K') {
       kingFile = c;
     }
-    c++;
   }
 
   return {

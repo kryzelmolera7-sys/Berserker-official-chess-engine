@@ -1377,15 +1377,14 @@ export function searchHybridNnueMcts(
     allocatedTimeMs = Math.round(allocatedTimeMs * 1.35);
   }
 
-  // 1. Run MCTS with Threat-Space Prophylaxis Guidance (35% budget, capped at 350ms so deep PVS gets full tactical runway)
+  // 1. Run MCTS with Threat-Space Prophylaxis Guidance
   const initialFastEval = evaluateBRnnueV030(fen);
   const isWinningAdvantage = initialFastEval.evalCpPerspective > 50;
-  const mctsTimeBudget = Math.min(350, Math.max(40, Math.round(allocatedTimeMs * 0.35)));
 
   const { root, completedSims, timeMs: mctsTime, reused, reusedVisits, ttHits, tbHits, timeExtensions } = runMctsSearch(
     fen,
     config.simulations,
-    mctsTimeBudget,
+    allocatedTimeMs * 0.70,
     config.cPuctBase,
     config.cPuctFactor,
     config.fpuReduction,
@@ -1407,10 +1406,9 @@ export function searchHybridNnueMcts(
   const mctsBest = sortedChildren[0];
   const mctsUci = mctsBest ? mctsBest.uci : `${legalMoves[0].from}${legalMoves[0].to}`;
 
-  // 2. Run Ultra-Fast PVS Tactical Search (65%+ of budget, unrestricted depth up to max(8, safetyNetDepth + 4))
-  const remainingTime = Math.max(80, allocatedTimeMs - mctsTime);
-  const pvsTargetDepth = Math.max(config.safetyNetDepth + 4, 10);
-  const pvsResult = searchIndependentBerserker(fen, pvsTargetDepth, remainingTime, 1, config.gameHistory);
+  // 2. Run PVS Tactical Safety Net Search
+  const remainingTime = Math.max(100, allocatedTimeMs - mctsTime);
+  const pvsResult = searchIndependentBerserker(fen, config.safetyNetDepth, remainingTime);
   const pvsUci = pvsResult.bestMoveUci;
   const pvsScoreCp = pvsResult.scoreCp;
 
@@ -1430,30 +1428,24 @@ export function searchHybridNnueMcts(
       const mctsMoveObj = legalMoves.find(m => `${m.from}${m.to}${m.promotion || ''}` === mctsUci);
       if (mctsMoveObj) {
         testChess.move(mctsMoveObj);
-        const verifyDepth = Math.max(3, pvsResult.depth - 1);
-        const verifyTime = Math.min(80, Math.max(30, Math.round(remainingTime * 0.25)));
-        const oppReply = searchIndependentBerserker(testChess.fen(), verifyDepth, verifyTime, 1, config.gameHistory);
+        const oppReply = searchIndependentBerserker(testChess.fen(), Math.max(2, config.safetyNetDepth - 1), 160);
         const mctsMovePvsScore = -oppReply.scoreCp;
         safetyNetDeltaCp = pvsScoreCp - mctsMovePvsScore;
 
-        const effectiveThreshold = pvsResult.depth >= 5
-          ? Math.min(config.safetyNetThresholdCp, 45)
-          : config.safetyNetThresholdCp;
-
-        if (safetyNetDeltaCp > effectiveThreshold || (pvsScoreCp > 180 && safetyNetDeltaCp > 25)) {
+        if (safetyNetDeltaCp > config.safetyNetThresholdCp) {
           reason = 'safety-net-override';
           chosenUci = pvsUci;
           const pvsMoveObj = legalMoves.find(m => `${m.from}${m.to}${m.promotion || ''}` === pvsUci);
           chosenSan = pvsMoveObj ? pvsMoveObj.san : pvsResult.bestMoveSan;
         } else {
-          const lambda = 0.20 + 0.55 * tacticalVolatility;
+          const lambda = 0.15 + 0.55 * tacticalVolatility;
           const mctsNormalizedVisits = mctsBest ? (mctsBest.visits / Math.max(1, root.visits)) : 0;
 
-          if (mctsNormalizedVisits > 0.55 && safetyNetDeltaCp < 25) {
+          if (mctsNormalizedVisits > 0.55 && safetyNetDeltaCp < 60) {
             reason = 'mcts-strategic';
             chosenUci = mctsUci;
             chosenSan = mctsBest.san;
-          } else if (lambda > 0.45 && safetyNetDeltaCp > 20) {
+          } else if (lambda > 0.50 && safetyNetDeltaCp > 80) {
             reason = 'bayesian-blend';
             chosenUci = pvsUci;
             const pvsMoveObj = legalMoves.find(m => `${m.from}${m.to}${m.promotion || ''}` === pvsUci);
@@ -1567,7 +1559,7 @@ export function searchHybridNnueMcts(
   return {
     bestMoveSan: chosenSan,
     bestMoveUci: chosenUci,
-    scoreCp: (reason === 'safety-net-override' || reason === 'bayesian-blend' || reason === 'consensus') ? pvsScoreCp : valueToCp(mctsBest.qValue),
+    scoreCp: reason === 'safety-net-override' ? pvsScoreCp : valueToCp(mctsBest.qValue),
     mctsSelectedUci: mctsUci,
     pvsSelectedUci: pvsUci,
     decisionReason: reason,

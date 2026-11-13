@@ -146,16 +146,6 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
   const [showConsole, setShowConsole] = useState<boolean>(false);
   const [consoleInput, setConsoleInput] = useState<string>('');
   const terminalLogsEndRef = useRef<HTMLDivElement>(null);
-  const rustSearchRef = useRef<{
-    fen: string;
-    bestmove: string;
-    scoreCp: number;
-    nodes: number;
-    nps: number;
-    depth: number;
-    seldepth: number;
-    pv: string;
-  } | null>(null);
 
   const [selectedSquare, setSelectedSquare] = useState<string | null>(null);
   const [legalMoves, setLegalMoves] = useState<string[]>([]);
@@ -730,48 +720,7 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
       }
     }
 
-    // 2. PRIORITY 2: NATIVE RUST v0.7.0 ENGINE (Bitboard PVS + TB-SE + CorrHist)
-    const rustHit = rustSearchRef.current;
-    if (!chosenMove && rustHit && rustHit.fen === chess.fen() && rustHit.bestmove && rustHit.bestmove !== '0000') {
-      const rUci = rustHit.bestmove;
-      if (isChess960 && chess960Info) {
-        const resolved = resolveChess960Move(chess, rUci, chess960Info.castlingConfig);
-        if (resolved.isChess960Castling && resolved.side) {
-          executeChess960Castling(chess, resolved.side, chess960Info.castlingConfig);
-          const castlingSan = resolved.side === 'kingside' ? 'O-O' : 'O-O-O';
-          chosenMove = { san: castlingSan, from: rUci.slice(0, 2), to: rUci.slice(2, 4) } as any;
-        }
-      }
-      if (!chosenMove) {
-        try {
-          const rMove = chess.move({
-            from: rUci.slice(0, 2),
-            to: rUci.slice(2, 4),
-            promotion: rUci[4] || 'q'
-          });
-          if (rMove) {
-            chosenMove = rMove;
-          }
-        } catch {
-          chosenMove = null;
-        }
-      }
-      if (chosenMove) {
-        setEvalCp(rustHit.scoreCp);
-        setSimulatedNodes(rustHit.nodes);
-        setSimulatedNps(rustHit.nps);
-        setSimulatedDepth(rustHit.depth);
-        setSimulatedSeldepth(rustHit.seldepth);
-        setSimulatedPv(rustHit.pv || chosenMove.san);
-        setLastBlendedMove({
-          chosenMoveUci: rUci,
-          chosenMoveSan: chosenMove.san,
-          reason: 'tactical-pv'
-        });
-      }
-    }
-
-    // 3. PRIORITY 3: BERSERKER WASM / LOCAL NEURAL ENGINE FALLBACK
+    // 2. PRIORITY 2: BERSERKER 18 CCRL NEURAL ENGINE (Full 3640+ Elo WASM NNUE Acceleration)
     if (!chosenMove) {
       const wasmMove = wasmBestMoveRef.current || wasmBestMove;
       if (wasmMove && wasmMove.length >= 4) {
@@ -902,48 +851,9 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
     setSimulatedDepth(1);
     setSimulatedPv('Berserker v0.3.0 BRnnuev030 dual neural search running...');
 
-    // Trigger Native Rust Engine Search + WASM fallback in parallel
-    const targetFen = chess.fen();
-    const searchMoveTime = Math.max(400, Math.round(thinkingTimeSec * 1000 - 200));
-    rustSearchRef.current = null;
-    startWasmSearch(targetFen, searchMoveTime);
-
-    const abortController = new AbortController();
-    fetch('/api/rust/search', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: abortController.signal,
-      body: JSON.stringify({
-        fen: targetFen,
-        depth: Math.min(18, Math.max(8, Math.round(thinkingTimeSec * 1.4))),
-        movetime: Math.min(4000, searchMoveTime),
-        isChess960,
-        multiPv: 1,
-      }),
-    })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (!data || !data.bestmove || abortController.signal.aborted) return;
-        const lastInfo = Array.isArray(data.infoLines) && data.infoLines.length > 0
-          ? data.infoLines[data.infoLines.length - 1]
-          : '';
-        const pvIdx = lastInfo.indexOf(' pv ');
-        const pvText = pvIdx >= 0 ? lastInfo.slice(pvIdx + 4).trim() : data.bestmove;
-        const t = data.telemetry || {};
-        rustSearchRef.current = {
-          fen: targetFen,
-          bestmove: data.bestmove,
-          scoreCp: typeof t.scoreCp === 'number' ? t.scoreCp : 0,
-          nodes: typeof t.nodes === 'number' ? t.nodes : 0,
-          nps: typeof t.nps === 'number' ? t.nps : 0,
-          depth: typeof t.depth === 'number' ? t.depth : 10,
-          seldepth: typeof t.seldepth === 'number' ? t.seldepth : 12,
-          pv: pvText,
-        };
-      })
-      .catch(() => {
-        // Fallback to WASM / local PVS silently if aborted or unreachable
-      });
+    // Trigger Native Berserker Engine Search
+    const searchMoveTime = Math.max(800, Math.round(thinkingTimeSec * 1000 - 200));
+    startWasmSearch(chess.fen(), searchMoveTime);
 
     const startTime = Date.now();
     let moveDispatched = false;
@@ -953,17 +863,9 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
       const remaining = Math.max(0, thinkingTimeSec - elapsed);
       setThinkingCountdown(parseFloat(remaining.toFixed(1)));
 
-      // Pull live telemetry from Native Rust or local Berserker engine via ref
-      const rInfo = rustSearchRef.current;
+      // Pull live telemetry from native Berserker engine via ref without resetting effect
       const currentInfo = wasmSearchInfoRef.current;
-      if (rInfo && rInfo.fen === targetFen && rInfo.depth > 0) {
-        setSimulatedDepth(rInfo.depth);
-        setSimulatedSeldepth(rInfo.seldepth || rInfo.depth + 4);
-        setSimulatedNodes(rInfo.nodes);
-        setSimulatedNps(rInfo.nps);
-        if (rInfo.pv) setSimulatedPv(rInfo.pv);
-        setEvalCp(rInfo.scoreCp);
-      } else if (currentInfo && currentInfo.depth > 0) {
+      if (currentInfo && currentInfo.depth > 0) {
         setSimulatedDepth(currentInfo.depth);
         setSimulatedSeldepth(currentInfo.seldepth || currentInfo.depth + 6);
         setSimulatedNodes(currentInfo.nodes);
@@ -988,11 +890,10 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
     }, 100);
 
     return () => {
-      abortController.abort();
       clearInterval(interval);
       stopWasmSearch();
     };
-  }, [fen, isEngineTurn, gameResult, playerColor, thinkingTimeSec, isChess960]);
+  }, [fen, isEngineTurn, gameResult, playerColor, thinkingTimeSec]);
 
   // Parse FEN into 8x8 array
   const parseFen = (currentFen: string) => {
@@ -1869,7 +1770,7 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
               <div className="grid grid-cols-2 gap-2 text-[11px]">
                 <div className="flex items-center gap-1.5 text-slate-300 bg-slate-900/80 p-2 rounded-lg border border-slate-800/80">
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                  <span>Berserker Dynamic Contempt</span>
+                  <span>Torch 4 Dynamic Contempt</span>
                 </div>
                 <div className="flex items-center gap-1.5 text-slate-300 bg-slate-900/80 p-2 rounded-lg border border-slate-800/80">
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
