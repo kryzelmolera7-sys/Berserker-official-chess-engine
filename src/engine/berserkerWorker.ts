@@ -17,6 +17,8 @@
 import { Chess } from 'chess.js';
 import { evaluateBRnnueV030, evaluateBRnnueV070, evaluateBerserker10Nnue } from './brnnueDualEval';
 import { searchHybridNnueMcts, resetMctsTree } from './berserkerMctsHybrid';
+import { FastBoard, exactSeeScore, moveToUci } from './fastBoard';
+import { runFastSearch, clearFastSearchTables, getFastTTUsagePermill, MATE_IN_MAX, MATE_SCORE } from './fastSearch';
 import { 
   normalizeChess960Fen, 
   resolveChess960Move, 
@@ -148,28 +150,27 @@ function applyFiftyMoveDecay(score: number, fen: string): number {
  */
 export function staticExchangeEvaluation(chess: InstanceType<typeof Chess>, move: any): number {
   if (!move.captured && !move.promotion) return 0;
+  try {
+    const board = FastBoard.fromFen(chess.fen());
+    const uci = `${move.from}${move.to}${move.promotion || ''}`;
+    const legal = new Int32Array(256);
+    const count = board.generateLegalMoves(legal, false);
+    for (let i = 0; i < count; i++) {
+      if (moveToUci(legal[i]) === uci) {
+        return exactSeeScore(board, legal[i]);
+      }
+    }
+  } catch {
+    // fallback
+  }
   const victimVal = (move.captured ? (PIECE_VALUES[move.captured] || 100) : 0) + (move.promotion ? (PIECE_VALUES[move.promotion] || 900) - 100 : 0);
   const attackerVal = PIECE_VALUES[move.piece] || 100;
-
-  if (victimVal >= attackerVal) return victimVal;
-
-  const toSquare = move.to;
-  try {
-    const clone = new Chess(chess.fen());
-    clone.move(move);
-    const oppMoves = clone.moves({ verbose: true });
-    const oppCaptures = oppMoves.filter((m: any) => m.to === toSquare);
-    if (oppCaptures.length === 0) {
-      return victimVal;
-    }
-    return victimVal - attackerVal;
-  } catch {
-    return victimVal - attackerVal;
-  }
+  return victimVal >= attackerVal ? victimVal : victimVal - attackerVal;
 }
 
 function clearSearchState() {
   transpositionTable.clear();
+  clearFastSearchTables();
   conthistTable.fill(0);
   captureHistoryTable.fill(0);
   for (let i = 0; i < 64; i++) {
@@ -659,14 +660,13 @@ function pvsSearch(
   return bestScore;
 }
 
-// Iterative Deepening Root Search with Progressive Aspiration Windows & Stability Time Manager
+// Iterative Deepening Root Search powered by FastBoard + FastSearch
 function executeRootSearch(targetDepth = 12, maxTimeMs = 3000) {
   isSearching = true;
   stopRequested = false;
-  const startTime = Date.now();
 
-  const moves = uciChess960 
-    ? getChess960LegalMoves(currentChess, true, currentChess960Config) 
+  const moves = uciChess960
+    ? getChess960LegalMoves(currentChess, true, currentChess960Config)
     : currentChess.moves({ verbose: true });
   if (moves.length === 0) {
     isSearching = false;
@@ -684,132 +684,33 @@ function executeRootSearch(targetDepth = 12, maxTimeMs = 3000) {
     return;
   }
 
-  const stats = { nodes: 0, qnodes: 0, seldepth: 0, ttHits: 0 };
-  let bestMoveUci = `${moves[0].from}${moves[0].to}${moves[0].promotion || ''}`;
-  let bestScore = 0;
+  const contemptAdj = Math.round(tacticalContempt * 0.25);
+  const fastRes = runFastSearch(
+    currentChess.fen(),
+    Math.max(1, targetDepth),
+    maxTimeMs,
+    multiPv,
+    gameHistoryFens,
+    contemptAdj
+  );
 
-  // Best-Move Stability Allocation
-  let lastBestMoveUci = '';
-  let moveFlips = 0;
-  let stableIterations = 0;
+  let bestMoveUci = fastRes.bestMoveUci || `${moves[0].from}${moves[0].to}${moves[0].promotion || ''}`;
+  const bestScore = fastRes.scoreCp;
+  const hashFull = getFastTTUsagePermill();
 
-  for (let currentDepth = 1; currentDepth <= targetDepth; currentDepth++) {
-    if (!isSearching || (Date.now() - startTime) >= maxTimeMs) break;
-
-    let pv: string[] = [];
-    let delta = 25;
-    let alpha = -30000;
-    let beta = 30000;
-    let score = 0;
-
-    // Progressive Aspiration Windows for depth >= 4
-    if (currentDepth >= 4) {
-      alpha = Math.max(-30000, bestScore - delta);
-      beta = Math.min(30000, bestScore + delta);
-
-      while (true) {
-        pv = [];
-        score = pvsSearch(currentChess, currentDepth, 0, alpha, beta, stats, pv, startTime, maxTimeMs, null, null);
-        if (!isSearching) break;
-
-        if (score <= alpha) {
-          // Fail low: inaccuracy danger! Widen alpha and increase search urgency
-          alpha = Math.max(-30000, alpha - delta * 2);
-          delta = Math.floor(delta * 1.6) + 15;
-          moveFlips += 2;
-        } else if (score >= beta) {
-          // Fail high: winning breakthrough!
-          beta = Math.min(30000, beta + delta * 2);
-          delta = Math.floor(delta * 1.6) + 15;
-        } else {
-          break; // Clean within window
-        }
-
-        if (alpha <= -20000 && beta >= 20000) {
-          pv = [];
-          score = pvsSearch(currentChess, currentDepth, 0, -30000, 30000, stats, pv, startTime, maxTimeMs, null, null);
-          break;
-        }
-      }
-    } else {
-      score = pvsSearch(currentChess, currentDepth, 0, -30000, 30000, stats, pv, startTime, maxTimeMs, null, null);
+  for (const cand of fastRes.multiPv) {
+    let scoreStr = `score cp ${cand.scoreCp}`;
+    if (Math.abs(cand.scoreCp) >= MATE_IN_MAX) {
+      const plyToMate = Math.max(1, MATE_SCORE - Math.abs(cand.scoreCp));
+      const mateMoves = Math.ceil(plyToMate / 2);
+      scoreStr = `score mate ${cand.scoreCp > 0 ? mateMoves : -mateMoves}`;
     }
-
-    if (pv.length > 0) {
-      bestMoveUci = pv[0];
-      bestScore = score;
-    }
-
-    const elapsedMs = Math.max(1, Date.now() - startTime);
-    const totalNodes = stats.nodes + stats.qnodes;
-    const nps = Math.round((totalNodes / elapsedMs) * 1000);
-    const pvStr = pv.join(' ');
-
-    let scoreStr = `score cp ${bestScore}`;
-    if (Math.abs(bestScore) > 20000) {
-      const mateDist = Math.ceil((25000 - Math.abs(bestScore)) / 2);
-      scoreStr = `score mate ${bestScore > 0 ? mateDist : -mateDist}`;
-    }
-
     self.postMessage(
-      `info depth ${currentDepth} seldepth ${stats.seldepth} multipv 1 ${scoreStr} nodes ${totalNodes} nps ${nps} time ${elapsedMs} hashfull ${Math.min(100, Math.round((transpositionTable.size / MAX_TT_SIZE) * 100))} pv ${pvStr}`
+      `info depth ${fastRes.depth} seldepth ${fastRes.seldepth} multipv ${cand.rank} ${scoreStr} nodes ${fastRes.nodes} nps ${fastRes.nps} time ${fastRes.timeMs} hashfull ${hashFull} pv ${cand.pvUci.join(' ')}`
     );
-
-    // Multi-PV candidate lines exploration
-    if (multiPv > 1) {
-      const excludedUcis = new Set<string>([bestMoveUci]);
-      for (let rank = 2; rank <= Math.min(multiPv, moves.length); rank++) {
-        let altScore = -30000;
-        let altPv: string[] = [];
-        let altBestUci = '';
-
-        for (const m of moves) {
-          const uci = `${m.from}${m.to}${m.promotion || ''}`;
-          if (excludedUcis.has(uci)) continue;
-
-          currentChess.move(m);
-          const subPv: string[] = [];
-          const s = -pvsSearch(currentChess, Math.max(1, currentDepth - 1), 1, -30000, 30000, stats, subPv, startTime, maxTimeMs, null, uci);
-          currentChess.undo();
-
-          if (s > altScore) {
-            altScore = s;
-            altBestUci = uci;
-            altPv = [uci, ...subPv];
-          }
-        }
-
-        if (altBestUci) {
-          excludedUcis.add(altBestUci);
-          let altScoreStr = `score cp ${altScore}`;
-          if (Math.abs(altScore) > 20000) {
-            const mateDist = Math.ceil((25000 - Math.abs(altScore)) / 2);
-            altScoreStr = `score mate ${altScore > 0 ? mateDist : -mateDist}`;
-          }
-          self.postMessage(
-            `info depth ${currentDepth} seldepth ${stats.seldepth} multipv ${rank} ${altScoreStr} nodes ${totalNodes} nps ${nps} time ${elapsedMs} pv ${altPv.join(' ')}`
-          );
-        }
-      }
-    }
-
-    // Time Management: Adjust based on move stability
-    if (bestMoveUci === lastBestMoveUci) {
-      stableIterations++;
-      if (stableIterations >= 3 && currentDepth >= 4 && elapsedMs > maxTimeMs * 0.55 && moveFlips === 0) {
-        break; // Solid move: early cut to preserve time budget
-      }
-    } else {
-      lastBestMoveUci = bestMoveUci;
-      stableIterations = 0;
-      moveFlips++;
-    }
-
-    const dynamicLimit = moveFlips >= 2 ? maxTimeMs * 0.95 : maxTimeMs * 0.70;
-    if (elapsedMs >= dynamicLimit) break;
   }
 
-  // Anti-Repetition Shield: Ensure White never repeats positions when winning
+  // Anti-Repetition Shield: Ensure engine never repeats positions when winning
   if (bestScore > 50 && gameHistoryFens.length > 0 && moves.length > 1) {
     try {
       const testChess = new Chess(currentChess.fen());
@@ -918,17 +819,20 @@ self.onmessage = function (event) {
         const { normalizedFen } = normalizeChess960Fen(rawFen);
         try {
           currentChess = new Chess(normalizedFen);
-          currentChess960Config = extractCastlingConfigFromFen(rawFen);
+          currentChess960Config = uciChess960 ? extractCastlingConfigFromFen(rawFen) : undefined;
           gameHistoryFens.push(currentChess.fen().split(' ').slice(0, 4).join(' '));
           if (movesIdx !== -1) {
             for (let i = movesIdx + 1; i < parts.length; i++) {
               const mv = parts[i];
-              const resolved = resolveChess960Move(currentChess, mv, currentChess960Config);
-              if (resolved.isChess960Castling && resolved.side) {
-                executeChess960Castling(currentChess, resolved.side, currentChess960Config);
-              } else {
-                currentChess.move({ from: mv.slice(0, 2), to: mv.slice(2, 4), promotion: mv[4] || undefined });
+              if (uciChess960 && currentChess960Config) {
+                const resolved = resolveChess960Move(currentChess, mv, currentChess960Config);
+                if (resolved.isChess960Castling && resolved.side) {
+                  executeChess960Castling(currentChess, resolved.side, currentChess960Config);
+                  gameHistoryFens.push(currentChess.fen().split(' ').slice(0, 4).join(' '));
+                  continue;
+                }
               }
+              currentChess.move({ from: mv.slice(0, 2), to: mv.slice(2, 4), promotion: mv[4] || undefined });
               gameHistoryFens.push(currentChess.fen().split(' ').slice(0, 4).join(' '));
             }
           }

@@ -91,6 +91,17 @@ export function evaluateBerserker090Nnue(fen: string): SubNetEvaluation {
   let whiteAttackWeight = 0;
   let blackAttackWeight = 0;
 
+  // Pass 1: locate kings first so attack vector distances use exact king coordinates
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const piece = board[r][c];
+      if (piece && piece.type === 'k') {
+        if (piece.color === 'w') whiteKing = { r, c };
+        else blackKing = { r, c };
+      }
+    }
+  }
+
   for (let r = 0; r < 8; r++) {
     for (let c = 0; c < 8; c++) {
       const piece = board[r][c];
@@ -99,8 +110,7 @@ export function evaluateBerserker090Nnue(fen: string): SubNetEvaluation {
       const val = PIECE_WEIGHTS[piece.type] || 0;
       if (piece.color === 'w') {
         whiteMat += val;
-        if (piece.type === 'k') whiteKing = { r, c };
-        else {
+        if (piece.type !== 'k') {
           // Berserker king hunt ray distance to black king
           const distToBlackKing = Math.max(1, Math.abs(r - blackKing.r) + Math.abs(c - blackKing.c));
           if (distToBlackKing <= 4) whiteAttackWeight += (5 - distToBlackKing) * 12;
@@ -109,8 +119,7 @@ export function evaluateBerserker090Nnue(fen: string): SubNetEvaluation {
         }
       } else {
         blackMat += val;
-        if (piece.type === 'k') blackKing = { r, c };
-        else {
+        if (piece.type !== 'k') {
           const distToWhiteKing = Math.max(1, Math.abs(r - whiteKing.r) + Math.abs(c - whiteKing.c));
           if (distToWhiteKing <= 4) blackAttackWeight += (5 - distToWhiteKing) * 12;
           if ((r === 3 || r === 4) && (c === 3 || c === 4)) blackAttackWeight += 14;
@@ -522,15 +531,91 @@ export interface BRnnueV070QuadEval {
  * 4. King Escorting Passed Pawn
  * 5. Rook Cutoff against enemy king
  */
+function computeSideSqueeze(
+  board: ({ type: string; color: string } | null)[][],
+  side: 'w' | 'b',
+  stm: 'w' | 'b',
+  nonKingPieces: number,
+  sideKingSq: { file: number; rank: number },
+  oppKingSq: { file: number; rank: number },
+  passedPawns: { file: number; rank: number }[],
+  rooks: { file: number; rank: number }[]
+): number {
+  let bonus = 0;
+  const isEndgame = nonKingPieces <= 8;
+
+  // 1. King Centralization & Opposition in Endgame
+  if (isEndgame) {
+    const sideDistToCenter = Math.abs(sideKingSq.file - 3.5) + Math.abs(sideKingSq.rank - 4.5);
+    bonus += Math.round((7.0 - sideDistToCenter) * 6);
+
+    const oppDistToCenter = Math.abs(oppKingSq.file - 3.5) + Math.abs(oppKingSq.rank - 4.5);
+    bonus += Math.round(oppDistToCenter * 5);
+
+    const kingDistF = Math.abs(sideKingSq.file - oppKingSq.file);
+    const kingDistR = Math.abs(sideKingSq.rank - oppKingSq.rank);
+    if ((kingDistF === 0 && kingDistR === 2) || (kingDistR === 0 && kingDistF === 2)) {
+      if (stm !== side) bonus += 20; // Side that moved into opposition holds it
+    }
+  }
+
+  // 2. Passed Pawn Escort & Rule of the Square
+  for (const pp of passedPawns) {
+    const promotionRank = side === 'w' ? 8 : 1;
+    const distToPromo = Math.abs(promotionRank - pp.rank);
+
+    if (side === 'w') {
+      if (pp.rank === 5) bonus += 45;
+      else if (pp.rank === 6) bonus += 95;
+      else if (pp.rank === 7) bonus += 180;
+    } else {
+      if (pp.rank === 4) bonus += 45;
+      else if (pp.rank === 3) bonus += 95;
+      else if (pp.rank === 2) bonus += 180;
+    }
+
+    const kingDistToPawn = Math.max(Math.abs(sideKingSq.file - pp.file), Math.abs(sideKingSq.rank - pp.rank));
+    if (kingDistToPawn <= 2) {
+      bonus += (3 - kingDistToPawn) * 25;
+    }
+
+    // Rule of the Square in pure pawn endgames
+    if (nonKingPieces === passedPawns.length) {
+      const squareSize = distToPromo;
+      const oppKingDistToPromo = Math.max(
+        Math.abs(oppKingSq.file - pp.file),
+        Math.abs(oppKingSq.rank - promotionRank)
+      );
+      const effDist = stm === side ? oppKingDistToPromo : oppKingDistToPromo - 1;
+      if (effDist > squareSize) {
+        bonus += 650;
+      }
+    }
+
+    // 3. Tarrasch Rule: Rook behind passed pawn
+    for (const rk of rooks) {
+      if (rk.file === pp.file) {
+        const isBehind = (side === 'w' && rk.rank < pp.rank) || (side === 'b' && rk.rank > pp.rank);
+        if (isBehind) {
+          bonus += 55;
+        }
+      }
+    }
+  }
+
+  return bonus;
+}
+
 export function computeEndgameSqueezeBonus(chess: Chess): number {
   const board = chess.board();
   const us = chess.turn();
-  const them = us === 'w' ? 'b' : 'w';
   let nonKingPieces = 0;
-  let ourKingSq = { file: 4, rank: us === 'w' ? 1 : 8 };
-  let theirKingSq = { file: 4, rank: us === 'w' ? 8 : 1 };
-  const ourPassedPawns: { file: number; rank: number }[] = [];
-  const ourRooks: { file: number; rank: number }[] = [];
+  let wKingSq = { file: 4, rank: 1 };
+  let bKingSq = { file: 4, rank: 8 };
+  const wPassed: { file: number; rank: number }[] = [];
+  const bPassed: { file: number; rank: number }[] = [];
+  const wRooks: { file: number; rank: number }[] = [];
+  const bRooks: { file: number; rank: number }[] = [];
 
   for (let r = 0; r < 8; r++) {
     for (let c = 0; c < 8; c++) {
@@ -539,100 +624,41 @@ export function computeEndgameSqueezeBonus(chess: Chess): number {
       const rank = 8 - r;
       const file = c;
       if (p.type === 'k') {
-        if (p.color === us) ourKingSq = { file, rank };
-        else theirKingSq = { file, rank };
+        if (p.color === 'w') wKingSq = { file, rank };
+        else bKingSq = { file, rank };
       } else {
         nonKingPieces++;
-        if (p.color === us) {
-          if (p.type === 'r') ourRooks.push({ file, rank });
-          if (p.type === 'p') {
-            // Check if passed pawn (no enemy pawns in front on same or adjacent files)
-            let isPassed = true;
-            for (let checkR = 0; checkR < 8; checkR++) {
-              for (let checkC = Math.max(0, c - 1); checkC <= Math.min(7, c + 1); checkC++) {
-                const ep = board[checkR][checkC];
-                if (ep && ep.type === 'p' && ep.color === them) {
-                  const enemyRank = 8 - checkR;
-                  if ((us === 'w' && enemyRank > rank) || (us === 'b' && enemyRank < rank)) {
-                    isPassed = false;
-                    break;
-                  }
+        if (p.type === 'r') {
+          if (p.color === 'w') wRooks.push({ file, rank });
+          else bRooks.push({ file, rank });
+        } else if (p.type === 'p') {
+          const them = p.color === 'w' ? 'b' : 'w';
+          let isPassed = true;
+          for (let checkR = 0; checkR < 8; checkR++) {
+            for (let checkC = Math.max(0, c - 1); checkC <= Math.min(7, c + 1); checkC++) {
+              const ep = board[checkR][checkC];
+              if (ep && ep.type === 'p' && ep.color === them) {
+                const enemyRank = 8 - checkR;
+                if ((p.color === 'w' && enemyRank > rank) || (p.color === 'b' && enemyRank < rank)) {
+                  isPassed = false;
+                  break;
                 }
               }
-              if (!isPassed) break;
             }
-            if (isPassed) {
-              ourPassedPawns.push({ file, rank });
-            }
+            if (!isPassed) break;
+          }
+          if (isPassed) {
+            if (p.color === 'w') wPassed.push({ file, rank });
+            else bPassed.push({ file, rank });
           }
         }
       }
     }
   }
 
-  let squeezeBonusCp = 0;
-  const isEndgame = nonKingPieces <= 8;
-
-  // 1. King Centralization & Opposition in Endgame
-  if (isEndgame) {
-    const ourDistToCenter = Math.abs(ourKingSq.file - 3.5) + Math.abs(ourKingSq.rank - 4.5);
-    squeezeBonusCp += Math.round((7.0 - ourDistToCenter) * 6);
-
-    const enemyDistToCenter = Math.abs(theirKingSq.file - 3.5) + Math.abs(theirKingSq.rank - 4.5);
-    squeezeBonusCp += Math.round(enemyDistToCenter * 5);
-
-    const kingDistF = Math.abs(ourKingSq.file - theirKingSq.file);
-    const kingDistR = Math.abs(ourKingSq.rank - theirKingSq.rank);
-    if ((kingDistF === 0 && kingDistR === 2) || (kingDistR === 0 && kingDistF === 2)) {
-      squeezeBonusCp += 20; // Direct Opposition
-    }
-  }
-
-  // 2. Passed Pawn Escort & Rule of the Square
-  for (const pp of ourPassedPawns) {
-    const promotionRank = us === 'w' ? 8 : 1;
-    const distToPromo = Math.abs(promotionRank - pp.rank);
-    
-    if (us === 'w') {
-      if (pp.rank === 5) squeezeBonusCp += 45;
-      else if (pp.rank === 6) squeezeBonusCp += 95;
-      else if (pp.rank === 7) squeezeBonusCp += 180;
-    } else {
-      if (pp.rank === 4) squeezeBonusCp += 45;
-      else if (pp.rank === 3) squeezeBonusCp += 95;
-      else if (pp.rank === 2) squeezeBonusCp += 180;
-    }
-
-    // King Escort: Our king close to passed pawn
-    const kingDistToPawn = Math.max(Math.abs(ourKingSq.file - pp.file), Math.abs(ourKingSq.rank - pp.rank));
-    if (kingDistToPawn <= 2) {
-      squeezeBonusCp += (3 - kingDistToPawn) * 25;
-    }
-
-    // Rule of the Square in pure pawn endgames
-    if (nonKingPieces === ourPassedPawns.length) {
-      const squareSize = distToPromo;
-      const enemyKingDistToPromo = Math.max(
-        Math.abs(theirKingSq.file - pp.file),
-        Math.abs(theirKingSq.rank - promotionRank)
-      );
-      if (enemyKingDistToPromo > squareSize) {
-        squeezeBonusCp += 650;
-      }
-    }
-
-    // 3. Tarrasch Rule: Rook behind passed pawn
-    for (const rk of ourRooks) {
-      if (rk.file === pp.file) {
-        const isBehind = (us === 'w' && rk.rank < pp.rank) || (us === 'b' && rk.rank > pp.rank);
-        if (isBehind) {
-          squeezeBonusCp += 55;
-        }
-      }
-    }
-  }
-
-  return squeezeBonusCp;
+  const wBonus = computeSideSqueeze(board, 'w', us, nonKingPieces, wKingSq, bKingSq, wPassed, wRooks);
+  const bBonus = computeSideSqueeze(board, 'b', us, nonKingPieces, bKingSq, wKingSq, bPassed, bRooks);
+  return us === 'w' ? (wBonus - bBonus) : (bBonus - wBonus);
 }
 
 export function evaluateBRnnueV070(fen: string): BRnnueV070QuadEval {
@@ -674,9 +700,10 @@ export function evaluateBRnnueV070(fen: string): BRnnueV070QuadEval {
   }
 
   const isEndgame = nonKingPieces <= 6;
-  const squeezeBonus = computeEndgameSqueezeBonus(chess);
-  const squeezedCentipawns = base.centipawns + squeezeBonus;
-  const squeezedPerspective = base.evalCpPerspective + (us === 'w' ? squeezeBonus : -squeezeBonus);
+  const squeezeBonusStm = computeEndgameSqueezeBonus(chess);
+  const squeezeBonusWhite = us === 'w' ? squeezeBonusStm : -squeezeBonusStm;
+  const squeezedCentipawns = base.centipawns + squeezeBonusWhite;
+  const squeezedPerspective = base.evalCpPerspective + squeezeBonusStm;
 
   const conversionCertainty = isEndgame && squeezedCentipawns > 100 
     ? Math.min(0.99, 0.70 + (squeezedCentipawns / 1000) * 0.25)
