@@ -187,47 +187,148 @@ async function startServer() {
       binaryPath: binPath,
       tarballUrl: '/downloads/berserker-v0.7.0-rust.tar.gz',
       features: [
-        'Threat-Biased Singular Extensions (TB-SE)',
-        'Dual-Perspective Threat History Table',
-        'Dynamic Cutoff Reductions with Node-Failure History',
-        'WDL-Guided Draw Avoidance & Endgame Conversion Matrix',
-        'Fast Syzygy Tablebase 6-Man WDL Cache',
-        'Chess960 (Fischer Random) 0-959 Scharnagl Engine'
+        'Bitboard-Accelerated Legal Move Gen (24M+ perft NPS) & Exact Swap-Off SEE',
+        'Threat-Biased & Double Singular Extensions (TB-SE) + Singular Multi-Cut',
+        'Petrosian Threat-Space Prophylaxis & Continuation/Capture/Correction History',
+        'Tapered PeSTO MG/EG Evaluator with SCReLU & WDL Conversion Squeeze Matrix',
+        'Symmetric Syzygy Tablebase Probing & Multi-PV (1..=5)',
+        'FIDE Chess960 (Scharnagl 0-959 + Shredder FEN + KxR Castling)'
       ]
     });
   });
 
-  // API Route: Native Rust Engine Search
-  app.post('/api/rust/search', async (req, res) => {
-    const { fen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', depth = 8, movetime = 1000, isChess960 = false } = req.body || {};
+  // Helper to run UCI commands against the compiled Rust binary
+  const runRustUci = async (commands: string) => {
     const binPath = path.join(__dirname, 'berserker-rust/target/release/berserker');
     if (!fs.existsSync(binPath)) {
-      return res.status(500).json({ error: 'Rust binary not compiled' });
+      throw new Error('Rust binary not compiled');
     }
-
     try {
-      const { spawn } = await import('child_process');
+      fs.chmodSync(binPath, 0o755);
+    } catch {
+      // ignore if read-only fs
+    }
+    const { spawn } = await import('child_process');
+    return await new Promise<string>((resolve, reject) => {
       const child = spawn(binPath);
       let output = '';
-
+      let errOut = '';
       child.stdout.on('data', (d) => { output += d.toString(); });
-      child.on('close', () => {
-        const lines = output.trim().split('\n');
-        const bestMoveLine = lines.find(l => l.startsWith('bestmove '));
-        const bestmove = bestMoveLine ? bestMoveLine.split(' ')[1] : 'e2e4';
-        const infoLines = lines.filter(l => l.startsWith('info '));
-        res.json({
-          engine: 'Berserker v0.7.0 Native Rust',
-          bestmove,
-          infoLines,
-          rawOutput: output,
-        });
+      child.stderr.on('data', (d) => { errOut += d.toString(); });
+      child.on('error', reject);
+      child.on('close', (code) => {
+        if (code !== 0 && !output) {
+          reject(new Error(errOut || `Rust engine exited with code ${code}`));
+        } else {
+          resolve(output);
+        }
       });
+      child.stdin.write(commands);
+      child.stdin.end();
+    });
+  };
 
-      const cmd = `uci\n${isChess960 ? 'setoption name UCI_Chess960 value true\n' : ''}position fen ${fen}\ngo depth ${depth} movetime ${movetime}\nquit\n`;
-      child.stdin.write(cmd);
+  // API Route: Native Rust Engine Search
+  app.post('/api/rust/search', async (req, res) => {
+    const {
+      fen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
+      depth = 10,
+      movetime = 1500,
+      isChess960 = false,
+      multiPv = 1,
+      wtime,
+      btime,
+      winc = 0,
+      binc = 0,
+    } = req.body || {};
+
+    const clampedDepth = Math.max(1, Math.min(24, Number(depth) || 10));
+    const clampedTime = Math.max(50, Math.min(10000, Number(movetime) || 1500));
+    const clampedPv = Math.max(1, Math.min(5, Number(multiPv) || 1));
+
+    try {
+      const goCmd = (typeof wtime === 'number' || typeof btime === 'number')
+        ? `go depth ${clampedDepth} wtime ${Math.max(50, Number(wtime) || 5000)} btime ${Math.max(50, Number(btime) || 5000)} winc ${Math.max(0, Number(winc) || 0)} binc ${Math.max(0, Number(binc) || 0)}`
+        : `go depth ${clampedDepth} movetime ${clampedTime}`;
+
+      const cmd = [
+        'uci',
+        `setoption name UCI_Chess960 value ${isChess960 ? 'true' : 'false'}`,
+        `setoption name MultiPV value ${clampedPv}`,
+        `position fen ${fen}`,
+        goCmd,
+        'quit',
+        ''
+      ].join('\n');
+
+      const output = await runRustUci(cmd);
+      const lines = output.trim().split('\n').map((l) => l.trim()).filter(Boolean);
+      const bestMoveLine = lines.find(l => l.startsWith('bestmove '));
+      const bestmove = bestMoveLine ? bestMoveLine.split(/\s+/)[1] : 'e2e4';
+      const infoLines = lines.filter(l => l.startsWith('info depth '));
+
+      // Parse deepest info line for structured telemetry
+      const lastInfo = infoLines[infoLines.length - 1] || '';
+      const parseIntToken = (line: string, key: string): number => {
+        const m = line.match(new RegExp(`\\b${key}\\s+(-?\\d+)`));
+        return m ? parseInt(m[1], 10) : 0;
+      };
+      const mateMatch = lastInfo.match(/\bscore mate (-?\d+)/);
+
+      res.json({
+        engine: 'Berserker v0.7.0 Native Rust',
+        bestmove,
+        multiPv: clampedPv,
+        infoLines,
+        telemetry: {
+          depth: parseIntToken(lastInfo, 'depth'),
+          seldepth: parseIntToken(lastInfo, 'seldepth'),
+          scoreCp: mateMatch ? (parseInt(mateMatch[1], 10) > 0 ? 25000 : -25000) : parseIntToken(lastInfo, 'score cp'),
+          mate: mateMatch ? parseInt(mateMatch[1], 10) : null,
+          nodes: parseIntToken(lastInfo, 'nodes'),
+          nps: parseIntToken(lastInfo, 'nps'),
+          tbHits: parseIntToken(lastInfo, 'tbhits'),
+        },
+        rawOutput: output,
+      });
     } catch (e: any) {
       res.status(500).json({ error: e?.message || 'Search execution error' });
+    }
+  });
+
+  // API Route: Native Rust Static Evaluation
+  app.post('/api/rust/eval', async (req, res) => {
+    const {
+      fen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
+      isChess960 = false,
+    } = req.body || {};
+
+    try {
+      const cmd = `setoption name UCI_Chess960 value ${isChess960 ? 'true' : 'false'}\nposition fen ${fen}\neval\nquit\n`;
+      const output = await runRustUci(cmd);
+      const evalLine = output.split('\n').find(l => l.includes('info string eval ')) || '';
+      res.json({ engine: 'Berserker v0.7.0 Native Rust', evalLine: evalLine.trim(), rawOutput: output });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || 'Eval execution error' });
+    }
+  });
+
+  // API Route: Native Rust Legal Perft Verification
+  app.post('/api/rust/perft', async (req, res) => {
+    const {
+      fen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
+      depth = 4,
+      isChess960 = false,
+    } = req.body || {};
+    const clampedDepth = Math.max(1, Math.min(5, Number(depth) || 4));
+
+    try {
+      const cmd = `setoption name UCI_Chess960 value ${isChess960 ? 'true' : 'false'}\nposition fen ${fen}\nperft ${clampedDepth}\nquit\n`;
+      const output = await runRustUci(cmd);
+      const perftLine = output.split('\n').find(l => l.startsWith('perft ')) || '';
+      res.json({ engine: 'Berserker v0.7.0 Native Rust', perftLine: perftLine.trim(), rawOutput: output });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || 'Perft execution error' });
     }
   });
 

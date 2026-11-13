@@ -27,6 +27,10 @@ export default function App() {
   const [isAuthLoading, setIsAuthLoading] = useState<boolean>(false);
 
   useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+  }, [activeTab]);
+
+  useEffect(() => {
     const unsub = subscribeAuth((user) => {
       setCurrentUser(user);
     });

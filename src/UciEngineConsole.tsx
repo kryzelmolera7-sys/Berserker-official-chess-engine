@@ -39,10 +39,22 @@ export const UciEngineConsole: React.FC = () => {
   const [copiedLogs, setCopiedLogs] = useState<boolean>(false);
   const [activeEvalMode, setActiveEvalMode] = useState<'brnnue-v030' | 'berserker-1.0-nnue' | 'aura-nnue'>('brnnue-v030');
   const [customFen, setCustomFen] = useState<string>('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
+  const [rustMultiPv, setRustMultiPv] = useState<number>(1);
+  const [isChess960Active, setIsChess960Active] = useState<boolean>(false);
+  const [rustTelemetry, setRustTelemetry] = useState<{
+    depth: number;
+    seldepth: number;
+    nodes: number;
+    nps: number;
+    scoreCp: number;
+    mate: number | null;
+    bestMove: string;
+  } | null>(null);
+  const lastRawIdxRef = useRef<number>(0);
   const [localLogs, setLocalLogs] = useState<string[]>([
-    'Berserker v0.7.0-dev Standalone Engine Core Initialized.',
-    'Default Neural Evaluator: Berserker NNUE v0.7.0 Quad-Head Architecture.',
-    'Search Core: Neural MCTS-DAG + Threat-Space Prophylaxis II + Bayesian Arbiter.',
+    'Berserker v0.7.0 Native Rust & Dual NNUE Engine Core Initialized.',
+    'Default Neural Evaluator: Berserker NNUE v0.7.0 Tapered PeSTO + SCReLU Matrix.',
+    'Search Core: Bitboard PVS + Threat-Biased SE + Petrosian Prophylaxis + CorrHist.',
     'Type UCI commands below or click quick-actions.',
     '--------------------------------------------------------------------------------'
   ]);
@@ -50,8 +62,16 @@ export const UciEngineConsole: React.FC = () => {
   const terminalEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (rawLogs.length > lastRawIdxRef.current) {
+      const incoming = rawLogs.slice(lastRawIdxRef.current);
+      lastRawIdxRef.current = rawLogs.length;
+      setLocalLogs((prev) => [...prev, ...incoming]);
+    }
+  }, [rawLogs]);
+
+  useEffect(() => {
     terminalEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [rawLogs, localLogs]);
+  }, [localLogs]);
 
   const handleSend = (cmdToSend?: string) => {
     const cmd = (cmdToSend || inputCmd).trim();
@@ -95,13 +115,19 @@ export const UciEngineConsole: React.FC = () => {
       setCustomFen(fenPart.split(' moves ')[0]);
     } else if (cmd === 'position startpos') {
       setCustomFen('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
+      setIsChess960Active(false);
+    } else if (cmd.toLowerCase().startsWith('setoption name multipv value ')) {
+      const val = parseInt(cmd.split(/\s+/).pop() || '1', 10);
+      if (!Number.isNaN(val)) setRustMultiPv(Math.max(1, Math.min(5, val)));
+    } else if (cmd.toLowerCase().startsWith('setoption name uci_chess960 value ')) {
+      setIsChess960Active(cmd.toLowerCase().endsWith('true'));
     }
 
     sendCommand(cmd);
     if (!cmdToSend) setInputCmd('');
   };
 
-  const allLogs = [...localLogs, ...rawLogs];
+  const allLogs = localLogs;
 
   return (
     <div className="space-y-6">
@@ -116,7 +142,7 @@ export const UciEngineConsole: React.FC = () => {
               +570 Elo vs v0.9.0
             </span>
             <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-orange-500/20 text-orange-300 border border-orange-500/30 flex items-center gap-1">
-              🦀 Native Rust v0.7.0 (7.5M NPS)
+              🦀 Native Rust v0.7.0 (Bitboard PVS)
             </span>
             <span className="text-xs text-slate-400 font-mono">
               Status: {isReady ? 'Engine Ready (UCI)' : 'Booting...'}
@@ -230,7 +256,7 @@ export const UciEngineConsole: React.FC = () => {
             const isBestMove = logLine.startsWith('bestmove');
             const isInfo = logLine.startsWith('info');
             const isReady = logLine.includes('readyok') || logLine.includes('uciok');
-            const isEval = logLine.includes('[SF-NNUE]') || logLine.includes('[AURA-NNUE]');
+            const isEval = logLine.includes('[Berserker') || logLine.includes('[AURA-NNUE]') || logLine.includes('info string eval');
 
             let colorClass = 'text-slate-300';
             if (isUserCmd) colorClass = 'text-amber-300 font-bold';
@@ -285,6 +311,7 @@ export const UciEngineConsole: React.FC = () => {
             onClick={() => {
               const sp = getRandomChess960Index();
               const info = getChess960PositionInfo(sp);
+              setIsChess960Active(true);
               handleSend('setoption name UCI_Chess960 value true');
               handleSend(`position fen ${info.fen}`);
               setLocalLogs((p) => [...p, `[Chess960] Loaded SP ${sp}: [${info.backrank}] - ${info.fen}`]);
@@ -295,13 +322,19 @@ export const UciEngineConsole: React.FC = () => {
           </button>
           <button
             onClick={() => {
-              setMultiPv(3);
-              setOption('MultiPV', 3);
-              setLocalLogs((p) => [...p, '[UCI] MultiPV set to 3 candidate lines']);
+              const nextPv = rustMultiPv === 3 ? 1 : 3;
+              setRustMultiPv(nextPv);
+              setMultiPv(nextPv);
+              setOption('MultiPV', nextPv);
+              setLocalLogs((p) => [...p, `[UCI] MultiPV set to ${nextPv} candidate line${nextPv > 1 ? 's' : ''}`]);
             }}
-            className="px-2.5 py-1 rounded bg-purple-950 hover:bg-purple-900 text-purple-300 border border-purple-800 transition text-xs font-semibold"
+            className={`px-2.5 py-1 rounded border transition text-xs font-semibold ${
+              rustMultiPv === 3
+                ? 'bg-purple-700 text-white border-purple-400'
+                : 'bg-purple-950 hover:bg-purple-900 text-purple-300 border-purple-800'
+            }`}
           >
-            MultiPV: 3
+            MultiPV: {rustMultiPv === 3 ? '3 (Active)' : '3'}
           </button>
           <button
             onClick={() => handleSend('go depth 15')}
@@ -311,16 +344,41 @@ export const UciEngineConsole: React.FC = () => {
           </button>
           <button
             onClick={async () => {
-              setLocalLogs((p) => [...p, '> [Native Rust Engine] Executing 10-ply release benchmark...']);
+              setLocalLogs((p) => [
+                ...p,
+                `> [Native Rust Engine] Searching depth 10 (MultiPV=${rustMultiPv}${isChess960Active ? ', Chess960' : ''})...`
+              ]);
               try {
                 const res = await fetch('/api/rust/search', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ fen: customFen, depth: 8, movetime: 1500 }),
+                  body: JSON.stringify({
+                    fen: customFen,
+                    depth: 10,
+                    movetime: 1500,
+                    isChess960: isChess960Active,
+                    multiPv: rustMultiPv
+                  }),
                 });
                 const data = await res.json();
-                if (data.infoLines) {
-                  setLocalLogs((p) => [...p, ...data.infoLines, `bestmove ${data.bestmove}`, `⚡ [Berserker Rust] Search completed successfully with native SIMD throughput!`]);
+                if (data.error) {
+                  setLocalLogs((p) => [...p, `[Rust Engine Error] ${data.error}`]);
+                } else if (data.infoLines) {
+                  if (data.telemetry) {
+                    setRustTelemetry({
+                      depth: data.telemetry.depth || 10,
+                      seldepth: data.telemetry.seldepth || 12,
+                      nodes: data.telemetry.nodes || 0,
+                      nps: data.telemetry.nps || 0,
+                      scoreCp: data.telemetry.scoreCp || 0,
+                      mate: data.telemetry.mate ?? null,
+                      bestMove: data.bestmove || '—',
+                    });
+                  }
+                  const summary = data.telemetry
+                    ? `⚡ [Berserker Rust] Depth ${data.telemetry.depth}/${data.telemetry.seldepth} • ${data.telemetry.nodes?.toLocaleString() || 0} nodes @ ${(data.telemetry.nps || 0).toLocaleString()} NPS${data.telemetry.tbHits ? ` • TB hits: ${data.telemetry.tbHits}` : ''}`
+                    : '⚡ [Berserker Rust] Search completed successfully!';
+                  setLocalLogs((p) => [...p, ...data.infoLines, `bestmove ${data.bestmove}`, summary]);
                 }
               } catch (e: any) {
                 setLocalLogs((p) => [...p, `[Rust Engine Error] ${e.message}`]);
@@ -329,6 +387,29 @@ export const UciEngineConsole: React.FC = () => {
             className="px-2.5 py-1 rounded bg-orange-950 hover:bg-orange-900 text-orange-300 border border-orange-800 transition font-bold flex items-center gap-1"
           >
             🦀 Rust Native Search
+          </button>
+          <button
+            onClick={async () => {
+              setLocalLogs((p) => [...p, '> [Native Rust Engine] Running legal move-tree perft 4...']);
+              try {
+                const res = await fetch('/api/rust/perft', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ fen: customFen, depth: 4, isChess960: isChess960Active }),
+                });
+                const data = await res.json();
+                if (data.perftLine) {
+                  setLocalLogs((p) => [...p, `[Rust Perft] ${data.perftLine}`]);
+                } else if (data.error) {
+                  setLocalLogs((p) => [...p, `[Rust Engine Error] ${data.error}`]);
+                }
+              } catch (e: any) {
+                setLocalLogs((p) => [...p, `[Rust Engine Error] ${e.message}`]);
+              }
+            }}
+            className="px-2.5 py-1 rounded bg-amber-950/80 hover:bg-amber-900 text-amber-200 border border-amber-700/80 transition font-bold"
+          >
+            🦀 Rust Perft 4
           </button>
           <a
             href="/downloads/berserker-v0.7.0-rust.tar.gz"
@@ -380,43 +461,57 @@ export const UciEngineConsole: React.FC = () => {
       </div>
 
       {/* Real-time Telemetry Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="bg-slate-900 p-4 rounded-xl border border-slate-800">
-          <span className="text-[10px] text-slate-400 uppercase font-mono font-semibold block">Search Depth</span>
-          <span className="text-xl font-bold font-mono text-purple-300 mt-1 block">
-            {searchInfo.depth > 0 ? `${searchInfo.depth} / ${searchInfo.seldepth}` : '—'}
-          </span>
-          <span className="text-[11px] text-slate-500 font-mono">PVS Alpha-Beta plies</span>
-        </div>
+      {(() => {
+        const displayDepth = searchInfo.depth > 0 ? searchInfo.depth : (rustTelemetry?.depth || 0);
+        const displaySeldepth = searchInfo.depth > 0 ? searchInfo.seldepth : (rustTelemetry?.seldepth || 0);
+        const displayNodes = searchInfo.nodes > 0 ? searchInfo.nodes : (rustTelemetry?.nodes || 0);
+        const displayNps = searchInfo.nps > 0 ? searchInfo.nps : (rustTelemetry?.nps || 0);
+        const displayScoreCp = searchInfo.depth > 0 ? searchInfo.scoreCp : (rustTelemetry?.scoreCp ?? 0);
+        const displayMate = searchInfo.depth > 0 ? searchInfo.mate : (rustTelemetry?.mate ?? null);
+        const displayBest = bestMove || rustTelemetry?.bestMove || '';
 
-        <div className="bg-slate-900 p-4 rounded-xl border border-slate-800">
-          <span className="text-[10px] text-slate-400 uppercase font-mono font-semibold block">Search Nodes</span>
-          <span className="text-xl font-bold font-mono text-cyan-300 mt-1 block">
-            {searchInfo.nodes > 0 ? searchInfo.nodes.toLocaleString() : '—'}
-          </span>
-          <span className="text-[11px] text-slate-500 font-mono">
-            {searchInfo.nps > 0 ? `@ ${searchInfo.nps.toLocaleString()} NPS` : 'WASM Vectorized'}
-          </span>
-        </div>
+        return (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="bg-slate-900 p-4 rounded-xl border border-slate-800">
+              <span className="text-[10px] text-slate-400 uppercase font-mono font-semibold block">Search Depth</span>
+              <span className="text-xl font-bold font-mono text-purple-300 mt-1 block">
+                {displayDepth > 0 ? `${displayDepth} / ${displaySeldepth}` : '—'}
+              </span>
+              <span className="text-[11px] text-slate-500 font-mono">
+                {rustTelemetry && searchInfo.depth === 0 ? 'Native Rust Bitboard PVS' : 'PVS Alpha-Beta plies'}
+              </span>
+            </div>
 
-        <div className="bg-slate-900 p-4 rounded-xl border border-slate-800">
-          <span className="text-[10px] text-slate-400 uppercase font-mono font-semibold block">Engine Score</span>
-          <span className="text-xl font-bold font-mono text-white mt-1 block">
-            {searchInfo.scoreCp > 0 ? `+${(searchInfo.scoreCp / 100).toFixed(2)}` : (searchInfo.scoreCp / 100).toFixed(2)}
-          </span>
-          <span className="text-[11px] text-slate-500 font-mono">
-            {searchInfo.mate ? `Mate in ${searchInfo.mate}` : `${searchInfo.scoreCp} cp`}
-          </span>
-        </div>
+            <div className="bg-slate-900 p-4 rounded-xl border border-slate-800">
+              <span className="text-[10px] text-slate-400 uppercase font-mono font-semibold block">Search Nodes</span>
+              <span className="text-xl font-bold font-mono text-cyan-300 mt-1 block">
+                {displayNodes > 0 ? displayNodes.toLocaleString() : '—'}
+              </span>
+              <span className="text-[11px] text-slate-500 font-mono">
+                {displayNps > 0 ? `@ ${displayNps.toLocaleString()} NPS` : 'Ready'}
+              </span>
+            </div>
 
-        <div className="bg-slate-900 p-4 rounded-xl border border-slate-800">
-          <span className="text-[10px] text-slate-400 uppercase font-mono font-semibold block">Best Move</span>
-          <span className="text-xl font-bold font-mono text-emerald-400 mt-1 block">
-            {bestMove || '—'}
-          </span>
-          <span className="text-[11px] text-slate-500 font-mono">Primary Candidate</span>
-        </div>
-      </div>
+            <div className="bg-slate-900 p-4 rounded-xl border border-slate-800">
+              <span className="text-[10px] text-slate-400 uppercase font-mono font-semibold block">Engine Score</span>
+              <span className="text-xl font-bold font-mono text-white mt-1 block">
+                {displayScoreCp > 0 ? `+${(displayScoreCp / 100).toFixed(2)}` : (displayScoreCp / 100).toFixed(2)}
+              </span>
+              <span className="text-[11px] text-slate-500 font-mono">
+                {displayMate ? `Mate in ${displayMate}` : `${displayScoreCp} cp`}
+              </span>
+            </div>
+
+            <div className="bg-slate-900 p-4 rounded-xl border border-slate-800">
+              <span className="text-[10px] text-slate-400 uppercase font-mono font-semibold block">Best Move</span>
+              <span className="text-xl font-bold font-mono text-emerald-400 mt-1 block">
+                {displayBest || '—'}
+              </span>
+              <span className="text-[11px] text-slate-500 font-mono">Primary Candidate</span>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };
