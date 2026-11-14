@@ -123,7 +123,7 @@ const DEFAULT_CONFIG: Required<HybridSearchConfig> = {
   cPuctFactor: 0.45,
   fpuReduction: 0.25,
   safetyNetDepth: 5,
-  safetyNetThresholdCp: 140,
+  safetyNetThresholdCp: 45,
   enableSubtreeReuse: true,
   enableTacticalRollout: true,
   enableTranspositionTable: true,
@@ -133,7 +133,7 @@ const DEFAULT_CONFIG: Required<HybridSearchConfig> = {
   virtualLossWeight: 0.35,
   contempt: 0.15,
   dirichletAlpha: 0.3,
-  dirichletEps: 0.20,
+  dirichletEps: 0.05,
   gameHistory: []
 };
 

@@ -40,8 +40,8 @@ export const UciEngineConsole: React.FC = () => {
   const [activeEvalMode, setActiveEvalMode] = useState<'brnnue-v030' | 'berserker-1.0-nnue' | 'aura-nnue'>('brnnue-v030');
   const [customFen, setCustomFen] = useState<string>('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
   const [localLogs, setLocalLogs] = useState<string[]>([
-    'Berserker v0.7.0-dev Standalone Engine Core Initialized.',
-    'Default Neural Evaluator: Berserker NNUE v0.7.0 Quad-Head Architecture.',
+    'Berserker v0.7.1-dev Standalone Engine Core Initialized.',
+    'Default Neural Evaluator: Berserker NNUE v0.7.1 Quad-Head Architecture.',
     'Search Core: Neural MCTS-DAG + Threat-Space Prophylaxis II + Bayesian Arbiter.',
     'Type UCI commands below or click quick-actions.',
     '--------------------------------------------------------------------------------'

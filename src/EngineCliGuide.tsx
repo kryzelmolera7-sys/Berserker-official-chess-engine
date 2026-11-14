@@ -25,7 +25,7 @@ export const EngineCliGuide: React.FC = () => {
     setTimeout(() => setCopiedSection(null), 2000);
   };
 
-  const terminalRunSnippet = `# 1. Run Berserker v0.3.0 Standalone UCI Engine directly via Terminal:
+  const terminalRunSnippet = `# 1. Run Berserker v0.7.1-dev Standalone UCI Engine directly via Terminal:
 node berserker-cli.js
 
 # Or with bun (ultra-fast startup):
@@ -33,60 +33,66 @@ bun berserker-cli.js
 
 # Send standard UCI commands:
 uci
+setoption name Hash value 16
 isready
 position startpos moves e2e4 e7e5
 eval
-go depth 8 movetime 1000
+go wtime 3000 btime 3000 winc 120 binc 120
 quit`;
 
-  const releaseAnnouncementSnippet = `# ⚔️ Berserker v0.4.0 dev-7000f01: Advanced Neural Search Architecture
+  const releaseAnnouncementSnippet = `# Berserker v0.7.1-dev: Incremental Search, Zero-Alloc Eval & Time-Control Release
 
-We are thrilled to officially announce **Berserker v0.4.0 dev-7000f01**!
-
-This major release delivers our most powerful native search and neural evaluation overhaul to date, introducing Singular Extensions (SE), Continuation History (Conthist), Static Exchange Evaluation (SEE), ProbCut, Multi-Cut Pruning, 16-Zone Spatial King Bucketing, and Best-Move Stability Time Allocation.
+We are excited to share **Berserker v0.7.1-dev**, an incremental release focused on eliminating inner-node overhead, fixing tactical horizon blind spots, and hardening real-time UCI clock discipline against the previous baseline (**Berserker v0.6.0**).
 
 ---
 
-### 🌟 What's New in Berserker v0.4.0 dev-7000f01:
+### Real Head-to-Head Tested Match vs Berserker v0.6.0
 
-1. **Singular Extensions (SE)**:
-   - Deep tactical verification at depth >= 6.
-   - When the principal Transposition Table move dominates all alternative moves by a singular margin (margin = depth * 3 cp) in a reduced search, the search depth is extended by +1 ply, eliminating critical tactical blind spots on forced lines.
+Tested via 28 opening-book pairs (56 games, swapped colors, 4 parallel workers, local \`scripts/run_elo_match.ts\`):
 
-2. **Multi-Ply Continuation History (Conthist)**:
-   - Implemented via a dedicated 768 x 768 matrix tracking piece-to-square transitions conditioned on the previous move.
-   - Moves with high historical synergy receive up to +25,000 in move ordering, elevating the most effective quiet candidate moves straight to the top of the search list.
+\`\`\`
+Elo   | 265.10 +- 128.84 (95%)
+Conf  | 3.0+0.12s Threads=1 Hash=16MB
+Games | N: 56 W: 42 L: 6 D: 8
+Penta | [1, 1, 4, 5, 17]
+\`\`\`
 
-3. **Static Exchange Evaluation (SEE) & QSearch Pruning**:
-   - Exact piece exchange simulation on target squares.
-   - Prunes losing captures (negative SEE) in Quiescence search unless checking, and prioritizes winning captures over quiet killers in main search.
-
-4. **ProbCut (Probability Cutoff)**:
-   - At depth >= 5, when static evaluation exceeds beta by 180 cp, the engine runs a shallow verification search. If the position holds above the cutoff threshold, the entire subtree is pruned immediately.
-
-5. **Multi-Cut Pruning**:
-   - In non-PV nodes at depth >= 5, when 3 or more candidate moves independently cause a cutoff at reduced depth (depth - 4), search fails high immediately without exploring deeper lines.
-
-6. **16-Zone Spatial King Bucketing & Dynamic Neural Attention**:
-   - Maps king coordinates into 16 mirrored quadrant regions, providing precise spatial context for king-pressure scoring.
-   - Continuous neural attention router dynamically balances tactical aggression against endgame harmony based on open files, piece tension, and king vulnerability.
-
-7. **WDL Rescaling (Win-Draw-Loss Compression)**:
-   - Compresses extreme centipawn spikes (>200 cp) using a hyperbolic tangent sigmoid, preventing the engine from pursuing illusory material advantages into dead-draw fortresses.
-
-8. **Best-Move Stability Time Allocation**:
-   - Dynamic clock manager that allocates up to 90% of budget when the principal variation is unstable across iterations, and exits early (at ~55% of time limit) when the move is decisive.
+- **LOS (Likelihood of Superiority)**: \`100.00%\` | **Score Rate**: \`82.14%\`
+- **Terminations**: 6 checkmates (4 for v0.7.1-dev), 7 win adjudications (4 for v0.7.1-dev), 8 rule draws; 1 timeout by v0.7.1-dev vs 34 timeouts by v0.6.0 due to v0.6.0's legacy 2048-node timer polling and per-node FEN allocations.
 
 ---
 
-### 🚀 Quick Start / How to Run:
+### Incremental Improvements in Berserker v0.7.1-dev
+
+1. **Zero-Allocation TypedArray Evaluation & O(1) Bitwise Passed Pawns**:
+   - Rewrote \`evaluatePosition\` to reuse pre-allocated \`Int8Array\` / \`Uint8Array\` scratch buffers with zero heap allocations inside leaf nodes.
+   - Added O(1) bitwise passed-pawn masks, symmetric positional imbalances (bishop pair, doubled/isolated pawns, rook open/semi-open & 7th rank, king pawn shield), +12 cp tempo bonus, and corrected \`PST_MG/EG.p\` rank orientation.
+
+2. **Native Zobrist Transposition Table Keys & Halfmove Propagation**:
+   - Replaced per-node \`chess.fen()\` string splitting in \`pvsSearch\` with O(1) \`chess.hash()\` 64-bit Zobrist keys and propagated \`halfmoveClock\` through recursive search calls for accurate 50-move decay.
+   - Fixed \`staticEvalStack[ply]\` check sentinel (\`99999\`) and improving RFP margins.
+
+3. **O(1) Static Exchange Evaluation (SEE) & Quiescence Checkmate Detection**:
+   - Replaced \`chess.move() + chess.moves() + chess.undo()\` in \`staticExchangeEvaluation\` with O(1) \`chess.attackers(move.to, enemy)\`.
+   - Fixed \`quiescenceSearch\` to skip \`standPat\` when \`inCheck\`, generate all legal check evasions, return \`-25000 + ply\` on checkmate, and never prune \`#\` checkmate moves in LMP, Futility, or QSearch SEE.
+
+4. **Chess960 Castling Parser & PVS-First Hybrid-MCTS Time Control**:
+   - Fixed \`extractCastlingConfig(backrank)\` FEN digit expansion (e.g. \`RNBQK2R\`) so shuffled/unexpanded backranks never misparse.
+   - Reordered \`Hybrid-MCTS-PVS\` to run PVS iterative deepening first (85% time budget) before MCTS PUCT/Prophylaxis verification (checking clock every 4 simulations with a 10 ms IPC reserve).
+
+---
+
+### Quick Start / Reproduce Benchmark
 
 \`\`\`bash
-# Direct UCI CLI launch:
+# Run Berserker v0.7.1-dev UCI CLI:
 node berserker-cli.js
 
-# Run head-to-head benchmark:
-node tests/compare_brnnue_v030_vs_berserker10.mjs
+# Run unit & regression test suite (92 tests):
+npx --yes tsx --test tests/*.test.ts src/engine/*.test.ts
+
+# Run head-to-head pentanomial UCI match vs Berserker v0.6.0:
+npx --yes tsx scripts/run_elo_match.ts --pairs 28 --workers 4 --base-ms 3000 --inc-ms 120
 \`\`\``;
 
   const selfPlayBakeSnippet = `# 1. Generate autonomous self-play games and automatically bake datasets:
@@ -306,46 +312,46 @@ g++ -O3 -std=c++17 -march=native berserker_standalone/berserker_engine.cpp -o be
         <div className="relative z-10 space-y-2">
           <div className="flex items-center gap-2">
             <span className="px-2.5 py-0.5 rounded-full bg-purple-500/20 text-purple-300 font-mono text-xs font-bold border border-purple-500/40 uppercase">
-              Berserker v0.2.0 Tournament Release
+              Berserker v0.7.1-dev Release
             </span>
             <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-mono text-xs font-bold border border-emerald-500/40">
-              +338 to +417 Verified Elo Gain
+              +265.10 +- 128.84 Elo vs v0.6.0 (N=56)
             </span>
           </div>
           <h2 className="text-2xl font-black tracking-tight text-white">
-            Autonomous Self-Play, Auto-Baking & GitHub Actions Training
+            Verified Pentanomial Match Benchmark &amp; UCI CLI Toolkit
           </h2>
           <p className="text-sm text-slate-300 max-w-2xl leading-relaxed">
-            Run autonomous self-play games that automatically bake into binary & Marlinformat training datasets, or run the automated GitHub Actions workflow to train and save the newly compiled <code className="text-purple-300 font-mono">.nnue</code> file directly into Berserker.
+            Head-to-head tested against the previous <code className="text-purple-300 font-mono">berserker-v0.6.0-cli.js</code> model across 28 opening-book pairs (56 games at 3.0+0.12s, Hash=16MB, Threads=1), alongside autonomous self-play baking &amp; CI workflows.
           </p>
         </div>
 
         {/* Quick Stats Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-4 border-t border-slate-800/80 mt-4">
           <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-1">
-            <span className="text-[11px] text-slate-400 uppercase font-mono font-semibold block">Full Tournament Score</span>
-            <span className="text-lg font-bold text-emerald-400 block">87.5% Score Rate</span>
-            <span className="text-xs text-slate-400 block">16 Wins • 3 Draws • 1 Loss</span>
-            <span className="text-xs font-mono font-bold text-purple-300 mt-2 block">+338 Elo Verified</span>
+            <span className="text-[11px] text-slate-400 uppercase font-mono font-semibold block">v0.7.1-dev vs v0.6.0 Score</span>
+            <span className="text-lg font-bold text-emerald-400 block">82.14% Score Rate</span>
+            <span className="text-xs text-slate-400 block">42 Wins • 8 Draws • 6 Losses (56 Games)</span>
+            <span className="text-xs font-mono font-bold text-purple-300 mt-2 block">+265.10 +- 128.84 Elo (100% LOS)</span>
           </div>
 
           <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-1">
-            <span className="text-[11px] text-slate-400 uppercase font-mono font-semibold block">Auto-Baking Formats</span>
-            <span className="text-base font-bold text-white block">Plain, Bin & PGN</span>
-            <span className="text-xs text-slate-400 block">Marlinformat, Bullet .binpack, PGN</span>
-            <span className="text-xs font-mono font-bold text-cyan-400 mt-2 block">100% In-Engine Data</span>
+            <span className="text-[11px] text-slate-400 uppercase font-mono font-semibold block">Pentanomial Distribution</span>
+            <span className="text-base font-bold text-white font-mono block">[1, 1, 4, 5, 17]</span>
+            <span className="text-xs text-slate-400 block">Conf: 3.0+0.12s Threads=1 Hash=16MB</span>
+            <span className="text-xs font-mono font-bold text-cyan-400 mt-2 block">OpenBench / Reckless Format</span>
           </div>
 
           <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-1">
-            <span className="text-[11px] text-slate-400 uppercase font-mono font-semibold block">Workflow Auto-Save</span>
-            <span className="text-base font-bold text-amber-300 block">Auto-Saves to NNUE</span>
-            <span className="text-xs text-slate-400 block">Writes to berserker_dual_net_ep9_b400.nnue</span>
-            <span className="text-xs font-mono font-bold text-emerald-400 mt-2 block">Git Commit & Artifact</span>
+            <span className="text-[11px] text-slate-400 uppercase font-mono font-semibold block">Incremental Gains</span>
+            <span className="text-base font-bold text-amber-300 block">Zero-Alloc Eval &amp; Zobrist TT</span>
+            <span className="text-xs text-slate-400 block">QSearch Evasion + PVS-First MCTS Clock</span>
+            <span className="text-xs font-mono font-bold text-emerald-400 mt-2 block">92 / 92 Tests Passing</span>
           </div>
         </div>
       </div>
 
-      {/* Official Berserker v0.4.0 dev-7000f01 Release Announcement */}
+      {/* Official Berserker v0.7.1-dev Release Announcement */}
       <div className="bg-slate-900 border-2 border-purple-500/50 rounded-2xl p-6 shadow-2xl space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-4">
           <div>
@@ -354,15 +360,15 @@ g++ -O3 -std=c++17 -march=native berserker_standalone/berserker_engine.cpp -o be
                 OFFICIAL DEV BUILD
               </span>
               <span className="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 font-mono text-[11px] font-bold">
-                Singular Extensions + Conthist + SEE
+                Elo +265.10 +- 128.84 (N=56)
               </span>
             </div>
             <h3 className="text-xl font-extrabold text-white flex items-center gap-2">
               <Award className="w-5 h-5 text-purple-400" />
-              Berserker v0.4.0 dev-7000f01 Release Announcement (Ready to Copy & Paste)
+              Berserker v0.7.1-dev Release Announcement (Ready to Copy &amp; Paste)
             </h3>
             <p className="text-xs text-slate-400 mt-0.5">
-              Copy-paste ready announcement for GitHub Releases, Chess forums, Discord, and engine leaderboards.
+              Copy-paste ready release notes with real pentanomial match telemetry against Berserker v0.6.0.
             </p>
           </div>
           <button
@@ -374,7 +380,7 @@ g++ -O3 -std=c++17 -march=native berserker_standalone/berserker_engine.cpp -o be
           </button>
         </div>
 
-        <pre className="p-4 bg-slate-950 rounded-xl border border-slate-800 font-mono text-xs text-slate-200 overflow-x-auto leading-relaxed max-h-[340px]">
+        <pre className="p-4 bg-slate-950 rounded-xl border border-slate-800 font-mono text-xs text-slate-200 overflow-x-auto leading-relaxed max-h-[380px]">
           {releaseAnnouncementSnippet}
         </pre>
       </div>
@@ -437,7 +443,7 @@ g++ -O3 -std=c++17 -march=native berserker_standalone/berserker_engine.cpp -o be
           <div>
             <h3 className="text-base font-bold text-white flex items-center gap-2">
               <Terminal className="w-4 h-4 text-purple-400" />
-              Run Berserker v0.2.0 Standalone UCI Engine via CLI
+              Run Berserker v0.7.1-dev Standalone UCI Engine via CLI
             </h3>
             <p className="text-xs text-slate-400 mt-0.5">
               Execute Berserker directly from your terminal or hook it into CuteChess / Arena / Banksia / Fritz

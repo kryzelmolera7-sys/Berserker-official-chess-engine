@@ -1,0 +1,11 @@
+# Exclude generated bundles, downloadable artifacts, legacy scripts, and data fixtures from GitHub Linguist stats
+public/downloads/** linguist-generated=true
+public/berserker-engine-worker.js linguist-generated=true
+berserker-cli.js linguist-generated=true
+scripts/** linguist-generated=true
+tests/*.mjs linguist-generated=true
+berserker_standalone/** linguist-vendored=true
+data/** linguist-documentation=true
+*.nnue linguist-generated=true
+*.tar.gz linguist-generated=true
+*.png linguist-documentation=true

@@ -1,6 +1,6 @@
 {
   "name": "Berserker 18 - CCRL Neural Chess Engine",
-  "description": "Berserker v0.2.0 CCRL Grandmaster chess engine powered by high-speed HalfKP-Dual NNUE neural evaluation, Syzygy 7-man tablebases, and tournament arena.",
+  "description": "Berserker v0.8.0 Grandmaster chess engine with BRnnue Quad-Head NNUE, Syzygy 7-man tablebases, Petrosian Prophylaxis II, and Stockfish 19 FULL duel arena.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

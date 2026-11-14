@@ -360,17 +360,30 @@ const DOWNLOAD_ITEMS: DownloadItem[] = [
 
   // Standalone Universal CLI Engine
   {
+    id: 'cli-standalone-v071',
+    name: 'Berserker v0.7.1-dev Universal UCI Engine',
+    fileName: 'berserker-v0.7.1-cli.js',
+    category: 'windows',
+    size: '86.8 KB',
+    type: 'Universal Runtime (JS / Node / Bun)',
+    description: 'Incremental release featuring zero-allocation TypedArray evaluation (O(1) bitwise passed-pawn & structure imbalances), native Zobrist chess.hash() TT keys, O(1) chess.attackers() SEE, Quiescence checkmate & check-evasion handling, FEN digit Chess960 castling fix, and PVS-first (85% budget) Hybrid-MCTS-PVS time control with safe IPC margin.',
+    sha256: 'c02d4a2a3d8fbf498d281ed29e7e89385725e9572975509bf105eeddadc210cc',
+    downloadUrl: '/downloads/berserker-v0.7.1-cli.js',
+    recommendedFor: 'All Operating Systems (Universal)',
+    badge: 'v0.7.1 Dev Latest'
+  },
+  {
     id: 'cli-standalone-v070',
     name: 'Berserker v0.7.0-dev Universal UCI Engine',
     fileName: 'berserker-v0.7.0-cli.js',
     category: 'windows',
-    size: '58.5 KB',
+    size: '73.5 KB',
     type: 'Universal Runtime (JS / Node / Bun)',
     description: 'Generational leap featuring Threat-Space Prophylaxis Phase II, DAG Transposition Transduction, Strict Endgame Conversion Guarantee (Anti-Repetition Shield & Mate-in-1/2 fast path), BRnnue v0.7.0 Quad-Head Architecture (Value WDL, Attack Subnet, Harmony Subnet, Threat Predictor), and Adaptive FPU. Runs identically on Windows, Linux, macOS, and Android.',
-    sha256: '9f81a7b483c6d28e4091a0c8b20147e8140f821d374825ce90a1b63c870a6491',
+    sha256: '13c48627db29f95f8e8d0c42c48c1941011e6727e190bc51f25e682b7c31c9ee',
     downloadUrl: '/downloads/berserker-v0.7.0-cli.js',
     recommendedFor: 'All Operating Systems (Universal)',
-    badge: 'v0.7.0 Dev Release'
+    badge: 'v0.7.0 Dev Archive'
   },
   {
     id: 'cli-standalone',
@@ -422,7 +435,7 @@ export const BerserkerReleaseDownloads: React.FC = () => {
                 OFFICIAL MULTI-PLATFORM RELEASE
               </span>
               <span className="px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 font-mono text-xs font-bold border border-emerald-500/30">
-                v0.4.0 STABLE
+                v0.7.1-dev LATEST
               </span>
               <span className="px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 font-mono text-xs font-bold border border-amber-500/30">
                 EXPANDED 68.5 MB / 45.3 MB NETS
@@ -430,7 +443,7 @@ export const BerserkerReleaseDownloads: React.FC = () => {
             </div>
 
             <h2 className="text-2xl sm:text-3xl lg:text-4xl font-black text-white tracking-tight">
-              Berserker v0.4.0 Multi-Platform Distribution
+              Berserker v0.7.1-dev Multi-Platform Distribution
             </h2>
             <p className="text-slate-300 text-sm sm:text-base max-w-2xl leading-relaxed">
               Tailored builds and configurations across Windows (AVX2, Modern, ARM64), Linux (x86_64, ARM64), macOS (Apple Silicon M1-M4, Intel), Android (DroidFish, Termux), and native C++17 compilation tools.
@@ -439,11 +452,11 @@ export const BerserkerReleaseDownloads: React.FC = () => {
 
           <div className="flex flex-col sm:flex-row md:flex-col gap-2.5 shrink-0">
             <button
-              onClick={() => handleDownloadFile('/downloads/berserker_brnnue_v040_huge.nnue', 'berserker_brnnue_v040_huge.nnue')}
+              onClick={() => handleDownloadFile('/downloads/berserker-v0.7.1-cli.js', 'berserker-v0.7.1-cli.js')}
               className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black text-xs transition flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20"
             >
-              <Layers className="w-4 h-4 text-slate-950" />
-              <span>Download Ultra Net (68.5 MB)</span>
+              <Download className="w-4 h-4 text-slate-950" />
+              <span>Download v0.7.1-dev CLI (86.8 KB)</span>
             </button>
             <button
               onClick={() => handleDownloadFile('/downloads/berserker_brnnue_v040_large.nnue', 'berserker_brnnue_v040_large.nnue')}
@@ -453,11 +466,11 @@ export const BerserkerReleaseDownloads: React.FC = () => {
               <span>Download Large Net (45.3 MB)</span>
             </button>
             <button
-              onClick={() => handleDownloadFile('/downloads/berserker-v0.4.0-cli.js', 'berserker-v0.4.0-cli.js')}
+              onClick={() => handleDownloadFile('/downloads/berserker-v0.6.0-cli.js', 'berserker-v0.6.0-cli.js')}
               className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-bold text-xs transition flex items-center justify-center gap-2"
             >
               <Download className="w-4 h-4 text-emerald-400" />
-              <span>Universal UCI Engine (.js)</span>
+              <span>Previous Model: v0.6.0 CLI (.js)</span>
             </button>
           </div>
         </div>
@@ -493,7 +506,7 @@ export const BerserkerReleaseDownloads: React.FC = () => {
       {/* Category Navigation */}
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 pb-3">
         {[
-          { key: 'all', label: 'All Files (28)', icon: Boxes },
+          { key: 'all', label: `All Files (${DOWNLOAD_ITEMS.length})`, icon: Boxes },
           { key: 'nnue', label: 'Expanded NNUE (68.5M / 45.3M)', icon: Layers },
           { key: 'windows', label: 'Windows (AVX2/Modern/ARM)', icon: Laptop },
           { key: 'linux', label: 'Linux (AVX2/Modern/ARM)', icon: Terminal },

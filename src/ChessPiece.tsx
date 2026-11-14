@@ -9,9 +9,9 @@ export const ChessPiece: React.FC<ChessPieceProps> = ({ type, className = "w-10 
   const isWhite = type === type.toUpperCase();
   const lower = type.toLowerCase();
 
-  const fill = isWhite ? '#f8fafc' : '#1e293b';
-  const stroke = isWhite ? '#334155' : '#0f172a';
-  const accent = isWhite ? '#e2e8f0' : '#334155';
+  const fill = isWhite ? '#f8fafc' : '#0f172a';
+  const stroke = isWhite ? '#334155' : '#cbd5e1';
+  const accent = isWhite ? '#cbd5e1' : '#64748b';
 
   switch (lower) {
     case 'p':

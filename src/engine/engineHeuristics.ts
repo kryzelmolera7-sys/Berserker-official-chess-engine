@@ -152,12 +152,12 @@ export const GM_OPENING_BOOK: Record<string, OpeningBookEntry> = {
     eco: 'C60'
   },
 
-  // 1. e4 e5 2. Nf3 Nc6 3. Bb5 -> Black 3... a6 (Morphy Defense)
-  'r1bqkbnr/pppp1ppp/2n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R b': {
-    san: 'a6',
-    uci: 'a7a6',
-    openingName: 'Ruy Lopez: Morphy Defense',
-    eco: 'C68'
+  // 1. e4 e5 2. Nf3 Nc6 3. Bb5 -> Black 3... Nf6 (Berlin Defense)
+  'r1bqkb1r/pppp1ppp/2n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R b': {
+    san: 'Nf6',
+    uci: 'g8f6',
+    openingName: 'Ruy Lopez: Berlin Defense (Solid Fortress)',
+    eco: 'C65'
   },
 
   // 1. e4 e5 2. Nf3 Nc6 3. Bb5 -> Black 3... Nf6 (Berlin Defense)
