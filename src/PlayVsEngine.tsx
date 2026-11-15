@@ -199,9 +199,7 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
 
   // Auto-scroll moves
   useEffect(() => {
-    if (moveHistory.length > 0) {
-      movesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }
+    movesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, [moveHistory]);
 
   // Syzygy 7-Piece Tablebase Probing Trigger:

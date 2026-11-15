@@ -95,34 +95,6 @@ const staticEvalStack: number[] = new Array(128).fill(0);
 const transpositionTable = new Map<string, TTEntry>();
 const MAX_TT_ENTRIES = 50000;
 
-// Feature flag for A/B testing TT origAlpha bound-flag fix
-let fixTtOrigAlpha = typeof process === 'undefined' || process.env?.BERSERKER_FIX_TT_FLAG !== '0';
-
-export function setFixTtOrigAlpha(enabled: boolean): void {
-  fixTtOrigAlpha = enabled;
-}
-
-export function clearIndependentSearchState(): void {
-  transpositionTable.clear();
-  conthistTable.fill(0);
-  conthist2PlyTable.fill(0);
-  captureHistoryTable.fill(0);
-  pawnCorrHist[0].fill(0);
-  pawnCorrHist[1].fill(0);
-  nonPawnCorrHist[0].fill(0);
-  nonPawnCorrHist[1].fill(0);
-  staticEvalStack.fill(0);
-  for (let c = 0; c < 2; c++) {
-    for (let f = 0; f < 64; f++) {
-      historyTable[c][f].fill(0);
-    }
-  }
-  for (let p = 0; p < 64; p++) {
-    killerMoves[p][0] = null;
-    killerMoves[p][1] = null;
-  }
-}
-
 function squareToIdx(sq: string): number {
   const col = sq.charCodeAt(0) - 97;
   const row = parseInt(sq[1], 10) - 1;
@@ -548,7 +520,6 @@ function pvsSearch(
     }
   }
 
-  const origAlpha = alpha;
   let bestScore = -30000;
   let bestMove: Move | null = null;
   let movesSearched = 0;
@@ -694,8 +665,7 @@ function pvsSearch(
 
   // Transposition Table Store
   let flag: SearchNodeType = 'EXACT';
-  const alphaBound = fixTtOrigAlpha ? origAlpha : alpha;
-  if (bestScore <= alphaBound) flag = 'UPPERBOUND';
+  if (bestScore <= alpha) flag = 'UPPERBOUND';
   else if (bestScore >= beta) flag = 'LOWERBOUND';
 
   if (bestMove) {
