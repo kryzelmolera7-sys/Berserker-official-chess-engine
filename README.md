@@ -1,4 +1,5 @@
-# Berserker v0.6.0 — Grandmaster Hybrid UCI Chess Engine
+#<img width="1672" height="941" alt="6431DF5E-5C54-4931-A0BC-A83A079B0A62" src="https://github.com/user-attachments/assets/1d1b7bd9-274d-4fa9-a77e-935057b6a28d" />
+ Berserker v0.6.0 — Grandmaster Hybrid UCI Chess Engine
 
 A high-performance, standalone UCI chess engine powered by the **Berserker NNUE Neural Architecture** paired with an advanced **Hybrid MCTS-PVS Core** featuring PUCT Policy Guidance, 2-Ply Leaf Quiescence Tactical Rollouts, Dynamic $c_{\text{puct}}$ Scaling, First Play Urgency (FPU), Subtree Reuse, Continuous Bayesian Soft Arbitration, and an uncompromising Alpha-Beta Tactical Safety Net.
 
