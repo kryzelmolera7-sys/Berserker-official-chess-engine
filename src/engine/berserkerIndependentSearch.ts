@@ -95,6 +95,34 @@ const staticEvalStack: number[] = new Array(128).fill(0);
 const transpositionTable = new Map<string, TTEntry>();
 const MAX_TT_ENTRIES = 50000;
 
+// Feature flag for A/B testing TT origAlpha bound-flag fix
+let fixTtOrigAlpha = typeof process === 'undefined' || process.env?.BERSERKER_FIX_TT_FLAG !== '0';
+
+export function setFixTtOrigAlpha(enabled: boolean): void {
+  fixTtOrigAlpha = enabled;
+}
+
+export function clearIndependentSearchState(): void {
+  transpositionTable.clear();
+  conthistTable.fill(0);
+  conthist2PlyTable.fill(0);
+  captureHistoryTable.fill(0);
+  pawnCorrHist[0].fill(0);
+  pawnCorrHist[1].fill(0);
+  nonPawnCorrHist[0].fill(0);
+  nonPawnCorrHist[1].fill(0);
+  staticEvalStack.fill(0);
+  for (let c = 0; c < 2; c++) {
+    for (let f = 0; f < 64; f++) {
+      historyTable[c][f].fill(0);
+    }
+  }
+  for (let p = 0; p < 64; p++) {
+    killerMoves[p][0] = null;
+    killerMoves[p][1] = null;
+  }
+}
+
 function squareToIdx(sq: string): number {
   const col = sq.charCodeAt(0) - 97;
   const row = parseInt(sq[1], 10) - 1;
@@ -162,33 +190,30 @@ export function staticExchangeEvaluation(chess: Chess, move: Move): number {
   if (victimVal >= attackerVal) return victimVal;
 
   const toSquare = move.to;
-  let moved = false;
   try {
-    chess.move(move);
-    moved = true;
-    const oppMoves = chess.moves({ verbose: true });
-    for (let i = 0; i < oppMoves.length; i++) {
-      if (oppMoves[i].to === toSquare) {
-        return victimVal - attackerVal;
-      }
+    const clone = new Chess(chess.fen());
+    clone.move(move);
+    const oppMoves = clone.moves({ verbose: true });
+    const oppCaptures = oppMoves.filter((m) => m.to === toSquare);
+    if (oppCaptures.length === 0) {
+      return victimVal; // Undefended target piece
     }
-    return victimVal; // Undefended target piece
+    return victimVal - attackerVal;
   } catch {
     return victimVal - attackerVal;
-  } finally {
-    if (moved) chess.undo();
   }
 }
 
 /**
  * Score moves for optimal move ordering in Alpha-Beta / PVS:
  * 1. TT Best Move (+1,000,000)
- * 2. Promotions (+350,000)
- * 3. Winning Captures via SEE >= 0 (+130,000)
- * 4. Killer Move 1 (+80,000), Killer Move 2 (+70,000)
- * 5. Castling (+65,000)
- * 6. Continuation History + History Heuristic (+0 to +55,000)
- * 7. Losing Captures (negative SEE) (< 50,000)
+ * 2. Winning Captures via SEE >= 0 (+150,000)
+ * 3. Equal/Material Captures via MVV-LVA (+100,000)
+ * 4. Killer Move 1 (+50,000)
+ * 5. Killer Move 2 (+40,000)
+ * 6. Continuation History (Conthist) (+0 to +25,000)
+ * 7. History Heuristic (+0 to +20,000)
+ * 8. Losing Captures (negative SEE) (-50,000)
  */
 function scoreMoveForOrdering(
   move: Move,
@@ -206,30 +231,24 @@ function scoreMoveForOrdering(
   const fromIdx = squareToIdx(move.from);
   const toIdx = squareToIdx(move.to);
 
-  if (move.promotion) {
-    const promoBase = move.promotion === 'q' ? 350000 : 210000;
-    const capBonus = move.captured ? (PIECE_VALUES[move.captured] || 100) * 10 : 0;
-    return promoBase + capBonus;
-  }
-
   // Captures: Most Valuable Victim - Least Valuable Attacker (MVV-LVA) + Capture History
   if (move.captured) {
     const victimVal = PIECE_VALUES[move.captured] || 100;
     const attackerVal = PIECE_VALUES[move.piece] || 100;
     const capHist = captureHistoryTable[colorIdx * 4096 + fromIdx * 64 + toIdx] || 0;
-    const seeScore = (victimVal >= attackerVal) ? 30000 : -60000;
+    const seeScore = (victimVal >= attackerVal) ? 30000 : -40000;
     return 100000 + (victimVal * 10 - attackerVal) + capHist + seeScore;
   }
 
   // Killer Moves
   if (ply < 64) {
-    if (killerMoves[ply][0] === uci) return 80000;
-    if (killerMoves[ply][1] === uci) return 70000;
+    if (killerMoves[ply][0] === uci) return 50000;
+    if (killerMoves[ply][1] === uci) return 40000;
   }
 
   // Castling Priority: King safety and rook activation are paramount (especially in Chess960)
   if (move.san === 'O-O' || move.san === 'O-O-O' || (move as any).isChess960Castling) {
-    return 65000;
+    return 45000;
   }
 
   // Continuation History (Conthist)
@@ -242,7 +261,7 @@ function scoreMoveForOrdering(
 
   // History Heuristic
   const histScore = historyTable[colorIdx][fromIdx][toIdx] || 0;
-  return Math.min(55000, histScore + conthistBonus);
+  return Math.min(30000, histScore + conthistBonus);
 }
 
 /**
@@ -255,65 +274,52 @@ function quiescenceSearch(
   beta: number,
   qdepth: number,
   maxQdepth: number,
-  stats: { nodes: number; qnodes: number },
-  ply: number = 0
+  stats: { nodes: number; qnodes: number }
 ): number {
   stats.qnodes++;
 
-  const inCheck = chess.inCheck();
+  // Stand-Pat Evaluation using Berserker v0.7.0 BRnnuev070 Quad NNUE + Squeeze Matrix
+  const evalResult = evaluateBRnnueV070(chess.fen());
+  const standPat = evalResult.evalCpPerspective;
 
-  if (!inCheck) {
-    // Stand-Pat Evaluation using Berserker v0.7.0 BRnnuev070 Quad NNUE + Squeeze Matrix
-    const evalResult = evaluateBRnnueV070(chess.fen());
-    const standPat = evalResult.evalCpPerspective;
-
-    if (qdepth >= maxQdepth) {
-      return standPat;
-    }
-
-    if (standPat >= beta) {
-      return beta;
-    }
-
-    // Delta Pruning: If even capturing an entire Queen cannot raise alpha, prune immediately
-    const BIG_DELTA = 950;
-    if (standPat < alpha - BIG_DELTA) {
-      return alpha;
-    }
-
-    if (alpha < standPat) {
-      alpha = standPat;
-    }
-  } else if (qdepth >= maxQdepth + 2) {
-    return evaluateBRnnueV070(chess.fen()).evalCpPerspective;
+  if (qdepth >= maxQdepth) {
+    return standPat;
   }
 
-  // Generate check evasions when in check, or tactical captures/promotions otherwise
+  if (standPat >= beta) {
+    return beta;
+  }
+
+  // Delta Pruning: If even capturing an entire Queen cannot raise alpha, prune immediately
+  const BIG_DELTA = 950;
+  if (standPat < alpha - BIG_DELTA) {
+    return alpha;
+  }
+
+  if (alpha < standPat) {
+    alpha = standPat;
+  }
+
+  // Generate only tactical captures
   const moves = chess.moves({ verbose: true });
-  if (inCheck && moves.length === 0) {
-    return -20000 + ply;
-  }
-  const captureMoves = inCheck ? moves : moves.filter((m) => !!m.captured || !!m.promotion);
+  const captureMoves = moves.filter((m) => !!m.captured);
 
-  // Sort captures/evasions by MVV-LVA
+  // Sort captures by MVV-LVA
   captureMoves.sort((a, b) => {
-    const valA = (a.captured ? (PIECE_VALUES[a.captured] || 100) * 10 : 0) - (PIECE_VALUES[a.piece] || 100) + (a.promotion ? 9000 : 0);
-    const valB = (b.captured ? (PIECE_VALUES[b.captured] || 100) * 10 : 0) - (PIECE_VALUES[b.piece] || 100) + (b.promotion ? 9000 : 0);
+    const valA = (PIECE_VALUES[a.captured || 'p'] || 100) * 10 - (PIECE_VALUES[a.piece] || 100);
+    const valB = (PIECE_VALUES[b.captured || 'p'] || 100) * 10 - (PIECE_VALUES[b.piece] || 100);
     return valB - valA;
   });
 
   for (const move of captureMoves) {
-    // SEE Pruning in Quiescence Search when not in check
-    if (!inCheck && !move.promotion && !move.san.includes('+') && !move.san.includes('#')) {
-      const vicVal = PIECE_VALUES[move.captured || 'p'] || 100;
-      const attVal = PIECE_VALUES[move.piece] || 100;
-      if (vicVal < attVal && staticExchangeEvaluation(chess, move) < 0) {
-        continue;
-      }
+    // SEE Pruning in Quiescence Search:
+    // Prune negative exchange captures unless the capture delivers a check
+    if (!move.san.includes('+') && staticExchangeEvaluation(chess, move) < 0) {
+      continue;
     }
 
     chess.move(move);
-    const score = -quiescenceSearch(chess, -beta, -alpha, qdepth + 1, maxQdepth, stats, ply + 1);
+    const score = -quiescenceSearch(chess, -beta, -alpha, qdepth + 1, maxQdepth, stats);
     chess.undo();
 
     if (score >= beta) {
@@ -347,7 +353,6 @@ function pvsSearch(
   }
 
   const isRoot = ply === 0;
-  const origAlpha = alpha;
   const inCheck = chess.inCheck();
 
   // Check extension: if king is under check, extend search depth by 1 ply
@@ -357,7 +362,7 @@ function pvsSearch(
 
   // Leaf Node: enter Quiescence Search
   if (depth <= 0) {
-    return quiescenceSearch(chess, alpha, beta, 0, 4, stats, ply);
+    return quiescenceSearch(chess, alpha, beta, 0, 4, stats);
   }
 
   // Checkmate / Draw detection
@@ -474,14 +479,11 @@ function pvsSearch(
     return inCheck ? -20000 + ply : 0;
   }
 
-  const orderedMoves = moves.map((m) => ({
-    move: m,
-    score: scoreMoveForOrdering(m, ttBestMoveUci, ply, turn, lastMove),
-  }));
-  orderedMoves.sort((a, b) => b.score - a.score);
-  for (let i = 0; i < orderedMoves.length; i++) {
-    moves[i] = orderedMoves[i].move;
-  }
+  moves.sort((a, b) => {
+    const scoreA = scoreMoveForOrdering(a, ttBestMoveUci, ply, turn, lastMove);
+    const scoreB = scoreMoveForOrdering(b, ttBestMoveUci, ply, turn, lastMove);
+    return scoreB - scoreA;
+  });
 
   // 5. Multi-Cut Pruning:
   // In non-PV nodes at depth >= 5, test if >= 3 shallow moves fail high
@@ -546,6 +548,7 @@ function pvsSearch(
     }
   }
 
+  const origAlpha = alpha;
   let bestScore = -30000;
   let bestMove: Move | null = null;
   let movesSearched = 0;
@@ -555,14 +558,14 @@ function pvsSearch(
 
     // 7. Late Move Pruning (LMP): Prune unpromising quiet moves after searching threshold moves
     if (depth <= 4 && !inCheck && !isRoot && movesSearched >= (3 + 3 * depth * depth)) {
-      if (!move.captured && !move.san.includes('+') && !move.san.includes('#') && !isCastling) {
+      if (!move.captured && !move.san.includes('+') && !isCastling) {
         continue;
       }
     }
 
     // 8. Futility Pruning: At shallow depths, skip unpromising quiet moves that cannot beat alpha
     if (depth <= 2 && !inCheck && !isRoot && Math.abs(alpha) < 9000) {
-      if (!move.captured && !move.san.includes('+') && !move.san.includes('#') && !isCastling) {
+      if (!move.captured && !move.san.includes('+') && !isCastling) {
         if (staticEval + 120 * depth <= alpha) {
           continue;
         }
@@ -601,7 +604,7 @@ function pvsSearch(
         else if (hist < -4000) reduction += 1;
 
         // Check deduction
-        if (move.san.includes('+') || move.san.includes('#')) reduction -= 1;
+        if (move.san.includes('+')) reduction -= 1;
 
         // Advanced passed pawn push deduction
         if (move.piece === 'p') {
@@ -689,9 +692,10 @@ function pvsSearch(
     nonPawnCorrHist[colorIdx][npKey] = Math.round(nonPawnCorrHist[colorIdx][npKey] * 0.90 + (errorBonus / 2) * 0.10);
   }
 
-  // Transposition Table Store (comparing against origAlpha fixes EXACT vs UPPERBOUND bug)
+  // Transposition Table Store
   let flag: SearchNodeType = 'EXACT';
-  if (bestScore <= origAlpha) flag = 'UPPERBOUND';
+  const alphaBound = fixTtOrigAlpha ? origAlpha : alpha;
+  if (bestScore <= alphaBound) flag = 'UPPERBOUND';
   else if (bestScore >= beta) flag = 'LOWERBOUND';
 
   if (bestMove) {
@@ -923,7 +927,7 @@ export function evaluateBerserker090Baseline(fen: string): { scoreCp: number; be
   for (const m of moves) {
     let mScore = 0;
     if (m.captured) mScore += (pieceVals[m.captured] || 100) * 10 - (pieceVals[m.piece] || 100);
-    if (m.san.includes('+') || m.san.includes('#')) mScore += 30;
+    if (m.san.includes('+')) mScore += 30;
     if (['e4', 'd4', 'e5', 'd5', 'c4', 'c5'].includes(m.to)) mScore += 18;
     scoredMoves.push({ move: m, score: mScore });
   }
