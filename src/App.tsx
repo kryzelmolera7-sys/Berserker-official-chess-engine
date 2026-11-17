@@ -55,100 +55,100 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-purple-500 selection:text-white">
       {/* Top Header */}
-      <header className="border-b border-slate-800/80 bg-slate-900/60 backdrop-blur px-4 lg:px-8 py-3.5 flex flex-wrap items-center justify-between gap-4 sticky top-0 z-30 shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-600 via-indigo-600 to-amber-500 flex items-center justify-center text-white shadow-lg shadow-purple-600/30">
-            <Gem className="w-6 h-6" />
+      <header className="border-b border-slate-800/80 bg-slate-900/75 backdrop-blur px-4 lg:px-6 py-2.5 flex flex-wrap xl:flex-nowrap items-center justify-between gap-3 sticky top-0 z-30 shadow-sm">
+        <div className="flex items-center gap-2.5 shrink-0">
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-purple-600 via-indigo-600 to-amber-500 flex items-center justify-center text-white shadow-lg shadow-purple-600/30 shrink-0">
+            <Gem className="w-5 h-5" />
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-lg font-black tracking-tight text-white flex items-center gap-1.5">
-                <span>Berserker</span>
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5">
+              <h1 className="text-base font-black tracking-tight text-white">
+                Berserker
               </h1>
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/40 font-bold uppercase">
-                v0.7.0 Dev
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/40 font-bold uppercase whitespace-nowrap">
+                v0.6.0 Official
               </span>
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-bold hidden sm:inline-block">
-                Quad-Head NNUE & MCTS-DAG
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-bold hidden sm:inline-block whitespace-nowrap">
+                WASM + NNUE SIMD
               </span>
             </div>
-            <p className="text-[11px] text-slate-400">
-              Neural MCTS-DAG & Threat-Space Prophylaxis II • BRnnue Quad-Head Architecture • Bayesian Arbiter
+            <p className="text-[11px] text-slate-400 truncate max-w-[340px]">
+              Standalone C++20 WASM Engine • Pure-PVS &amp; Reckless NNUE
             </p>
           </div>
         </div>
 
-        {/* Tab Navigation: Pure Engine Terminal, CLI Guide, NNUE, Board, Downloads */}
-        <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800">
+        {/* Tab Navigation */}
+        <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 overflow-x-auto">
           <button
             onClick={() => setActiveTab('downloads')}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap ${
               activeTab === 'downloads'
                 ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20 font-extrabold'
                 : 'text-amber-400 hover:text-amber-300'
             }`}
           >
-            <Download className="w-3.5 h-3.5" />
-            <span>v0.7.0 Downloads</span>
+            <Download className="w-3.5 h-3.5 shrink-0" />
+            <span>v0.6.0 Downloads</span>
           </button>
 
           <button
             onClick={() => setActiveTab('terminal')}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap ${
               activeTab === 'terminal'
                 ? 'bg-purple-600 text-white shadow-md shadow-purple-600/20'
                 : 'text-slate-400 hover:text-white'
             }`}
           >
-            <Terminal className="w-3.5 h-3.5" />
+            <Terminal className="w-3.5 h-3.5 shrink-0" />
             <span>UCI Engine Shell</span>
           </button>
 
           <button
             onClick={() => setActiveTab('guide')}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap ${
               activeTab === 'guide'
                 ? 'bg-emerald-600 text-white shadow-md'
                 : 'text-emerald-400 hover:text-emerald-300'
             }`}
           >
-            <Code2 className="w-3.5 h-3.5" />
+            <Code2 className="w-3.5 h-3.5 shrink-0" />
             <span>CLI & Benchmark</span>
           </button>
 
           <button
             onClick={() => setActiveTab('neural')}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap ${
               activeTab === 'neural'
                 ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-md shadow-purple-600/20'
                 : 'text-slate-400 hover:text-white'
             }`}
           >
-            <Layers className="w-3.5 h-3.5 text-pink-400" />
+            <Layers className="w-3.5 h-3.5 text-pink-400 shrink-0" />
             <span>BRnnue Architecture</span>
           </button>
 
           <button
             onClick={() => setActiveTab('board')}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap ${
               activeTab === 'board'
                 ? 'bg-slate-800 text-white shadow-md'
                 : 'text-slate-400 hover:text-white'
             }`}
           >
-            <Play className="w-3.5 h-3.5 text-slate-300" />
+            <Play className="w-3.5 h-3.5 text-slate-300 shrink-0" />
             <span>Board Visualizer</span>
           </button>
         </div>
 
         {/* Cloud Archive & Auth Widget */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           <button
             onClick={() => setShowCloudGamesModal(true)}
-            className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition border border-slate-700 shadow-sm"
+            className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition border border-slate-700 shadow-sm whitespace-nowrap"
             title="Browse Community Cloud Games"
           >
-            <Cloud className="w-3.5 h-3.5 text-cyan-400" />
+            <Cloud className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
             <span className="hidden sm:inline">Cloud Archive</span>
           </button>
 
@@ -169,9 +169,9 @@ export default function App() {
             <button
               onClick={handleGoogleSignIn}
               disabled={isAuthLoading}
-              className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition border border-slate-700 shadow-sm"
+              className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition border border-slate-700 shadow-sm whitespace-nowrap"
             >
-              <LogIn className="w-3.5 h-3.5 text-emerald-400" />
+              <LogIn className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
               <span>Sign in</span>
             </button>
           )}
@@ -214,7 +214,7 @@ export default function App() {
 
       {/* Clean Footer */}
       <footer className="border-t border-slate-900 bg-slate-950/80 px-4 lg:px-8 py-3 text-center text-xs text-slate-500">
-        Berserker v0.7.0-dev Official Release • Neural MCTS-DAG & Threat-Space Prophylaxis II • BRnnue Quad-Head NNUE • 64 Threads • 32GB Hash
+        Berserker v0.6.0 Official Release • Battle-Hardened Pure-PVS Alpha-Beta & Berserker NNUE • 64 Threads • 32GB Hash
       </footer>
     </div>
   );

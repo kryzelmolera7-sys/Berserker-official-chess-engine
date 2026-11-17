@@ -38,6 +38,7 @@ export interface BerserkerEngineConfig {
 
 export interface UseBerserkerEngineReturn {
   isReady: boolean;
+  isNnueReady: boolean;
   isSearching: boolean;
   searchInfo: BerserkerSearchInfo;
   bestMove: string | null;
@@ -45,10 +46,11 @@ export interface UseBerserkerEngineReturn {
   multiPvCandidates: BerserkerMultiPvCandidate[];
   rawLogs: string[];
   engineConfig: BerserkerEngineConfig;
-  startSearch: (fen: string, movetimeMs?: number) => void;
-  startInfiniteSearch: (fen: string) => void;
+  startSearch: (fen: string, movetimeMs?: number, uciMoves?: string[], startFen?: string) => void;
+  startInfiniteSearch: (fen: string, uciMoves?: string[], startFen?: string) => void;
   stopSearch: () => void;
   sendCommand: (cmd: string) => void;
+  clearLogs: () => void;
   setOption: (name: string, value: string | number | boolean) => void;
   setMultiPv: (lines: number) => void;
   setHashSize: (mb: number) => void;
@@ -57,27 +59,46 @@ export interface UseBerserkerEngineReturn {
   setKingAttackScale: (scalePercent: number) => void;
 }
 
+const INITIAL_SEARCH_INFO: BerserkerSearchInfo = {
+  depth: 0,
+  seldepth: 0,
+  scoreCp: 0,
+  mate: null,
+  nodes: 0,
+  nps: 0,
+  timeMs: 0,
+  pv: '',
+  hashFull: 0,
+  wdl: { win: 33.3, draw: 33.4, loss: 33.3 },
+};
+
 /**
  * Calculates win/draw/loss probabilities using FIDE / CCRL logistic model
  */
-export function calculateWdlProbabilities(scoreCp: number, ply = 30): { win: number; draw: number; loss: number } {
-  // Normalize cp into win percentage using standard logistic function
+export function calculateWdlProbabilities(scoreCp: number, _ply = 30): { win: number; draw: number; loss: number } {
   const winExp = 1 / (1 + Math.exp(-scoreCp / 160));
   const lossExp = 1 / (1 + Math.exp(scoreCp / 160));
-  
-  // Draw probability increases with ply depth and decreases with high score deltas
+
   const absScore = Math.abs(scoreCp);
   const drawBase = 0.45 * Math.exp(-absScore / 250);
-  
+
   const win = Math.max(0, Math.min(1, winExp * (1 - drawBase * 0.5)));
   const loss = Math.max(0, Math.min(1, lossExp * (1 - drawBase * 0.5)));
   const draw = Math.max(0, 1 - win - loss);
-  
+
   return {
     win: Math.round(win * 1000) / 10,
     draw: Math.round(draw * 1000) / 10,
     loss: Math.round(loss * 1000) / 10,
   };
+}
+
+function buildPositionCommand(fen: string, uciMoves?: string[], startFen?: string): string {
+  if (uciMoves && uciMoves.length > 0) {
+    const base = startFen ? `position fen ${startFen}` : 'position startpos';
+    return `${base} moves ${uciMoves.join(' ')}`;
+  }
+  return `position fen ${fen}`;
 }
 
 export const useBerserkerEngine = (): UseBerserkerEngineReturn & {
@@ -86,29 +107,18 @@ export const useBerserkerEngine = (): UseBerserkerEngineReturn & {
   multiPvCandidatesRef: React.MutableRefObject<BerserkerMultiPvCandidate[]>;
 } => {
   const [isReady, setIsReady] = useState<boolean>(false);
+  const [isNnueReady, setIsNnueReady] = useState<boolean>(false);
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const [engineConfig, setEngineConfig] = useState<BerserkerEngineConfig>({
-    threads: 64,
-    hashMb: 32768,
+    threads: 1,
+    hashMb: 64,
     multiPv: 1,
-    contempt: 45,
+    contempt: 0,
     kingAttackScale: 140,
     showWdl: true,
   });
 
-  const [searchInfo, setSearchInfo] = useState<BerserkerSearchInfo>({
-    depth: 0,
-    seldepth: 0,
-    scoreCp: 0,
-    mate: null,
-    nodes: 0,
-    nps: 0,
-    timeMs: 0,
-    pv: '',
-    hashFull: 0,
-    wdl: { win: 33.3, draw: 33.4, loss: 33.3 },
-  });
-
+  const [searchInfo, setSearchInfo] = useState<BerserkerSearchInfo>(INITIAL_SEARCH_INFO);
   const [bestMove, setBestMove] = useState<string | null>(null);
   const [ponderMove, setPonderMove] = useState<string | null>(null);
   const [multiPvCandidates, setMultiPvCandidates] = useState<BerserkerMultiPvCandidate[]>([]);
@@ -116,17 +126,18 @@ export const useBerserkerEngine = (): UseBerserkerEngineReturn & {
 
   const workerRef = useRef<Worker | null>(null);
   const bestMoveRef = useRef<string | null>(null);
-  const searchInfoRef = useRef<BerserkerSearchInfo>(searchInfo);
+  const searchInfoRef = useRef<BerserkerSearchInfo>(INITIAL_SEARCH_INFO);
   const multiPvCandidatesRef = useRef<BerserkerMultiPvCandidate[]>([]);
   const multiPvMapRef = useRef<Map<number, BerserkerMultiPvCandidate>>(new Map());
+  // Prevents stale `bestmove` from an aborted search overwriting state of a newly started search
+  const outstandingGoRef = useRef<number>(0);
 
-  // Initialize Worker
   useEffect(() => {
     let worker: Worker | null = null;
     try {
       worker = new Worker('/berserker-engine-worker.js');
     } catch (err) {
-      console.error('Failed to initialize Berserker worker', err);
+      console.error('Failed to initialize Berserker WASM worker', err);
     }
 
     if (!worker) return;
@@ -136,19 +147,21 @@ export const useBerserkerEngine = (): UseBerserkerEngineReturn & {
       const line = typeof event.data === 'string' ? event.data : '';
       if (!line) return;
 
-      // Keep last 100 log lines
       setRawLogs((prev) => {
         const next = [...prev, line];
-        return next.length > 100 ? next.slice(-100) : next;
+        return next.length > 200 ? next.slice(-200) : next;
       });
 
-      if (line === 'readyok' || line.includes('uciok')) {
+      if (line.includes('NNUE loaded:')) {
+        setIsNnueReady(true);
+      }
+
+      if (line === 'readyok') {
         setIsReady(true);
       }
 
-      // Parse search info lines
-      // e.g. "info depth 18 seldepth 28 multipv 1 score cp 45 nodes 84920 nps 1750000 hashfull 32 pv e2e4 c7c5 ..."
-      if (line.startsWith('info ') && line.includes('depth ')) {
+      // Parse search info lines (ignore lingering lines while an aborted prior go is winding down)
+      if (line.startsWith('info ') && line.includes('depth ') && outstandingGoRef.current <= 1) {
         const depthMatch = line.match(/\bdepth (\d+)/);
         const seldepthMatch = line.match(/\bseldepth (\d+)/);
         const scoreCpMatch = line.match(/\bscore cp (-?\d+)/);
@@ -177,7 +190,6 @@ export const useBerserkerEngine = (): UseBerserkerEngineReturn & {
 
         const wdl = calculateWdlProbabilities(scoreCp, depth);
 
-        // Track multi-PV line
         const moves = pv.split(/\s+/);
         const primaryMove = moves[0] || '';
 
@@ -199,7 +211,6 @@ export const useBerserkerEngine = (): UseBerserkerEngineReturn & {
           setMultiPvCandidates(sortedCandidates);
         }
 
-        // Only update primary search info on multipv 1
         if (multiPvRank === 1) {
           const updated: BerserkerSearchInfo = {
             depth,
@@ -218,9 +229,15 @@ export const useBerserkerEngine = (): UseBerserkerEngineReturn & {
         }
       }
 
-      // Parse bestmove line
-      // e.g. "bestmove e2e4 ponder e7e5"
       if (line.startsWith('bestmove')) {
+        if (outstandingGoRef.current > 0) {
+          outstandingGoRef.current -= 1;
+          if (outstandingGoRef.current > 0) {
+            // This bestmove belonged to an aborted previous search; wait for current search
+            return;
+          }
+        }
+
         const parts = line.split(/\s+/);
         const bm = parts[1] || null;
         const ponderIdx = parts.indexOf('ponder');
@@ -233,13 +250,9 @@ export const useBerserkerEngine = (): UseBerserkerEngineReturn & {
       }
     };
 
-    // Configure Berserker UCI options
     worker.postMessage('uci');
-    worker.postMessage(`setoption name Threads value 64`);
-    worker.postMessage(`setoption name Hash value 32768`);
-    worker.postMessage(`setoption name SearchMode value Pure-PVS`);
-    worker.postMessage(`setoption name MultiPV value 1`);
-    worker.postMessage(`setoption name UCI_ShowWDL value true`);
+    worker.postMessage('setoption name SearchMode value Pure-PVS');
+    worker.postMessage('setoption name MultiPV value 1');
     worker.postMessage('isready');
 
     return () => {
@@ -252,10 +265,21 @@ export const useBerserkerEngine = (): UseBerserkerEngineReturn & {
     };
   }, []);
 
+  const clearLogs = useCallback(() => {
+    setRawLogs([]);
+  }, []);
+
   const sendCommand = useCallback((cmd: string) => {
-    if (workerRef.current) {
-      workerRef.current.postMessage(cmd);
+    const trimmed = cmd.trim();
+    if (!trimmed || !workerRef.current) return;
+    if (trimmed.startsWith('go')) {
+      outstandingGoRef.current += 1;
+      bestMoveRef.current = null;
+      setBestMove(null);
+      setPonderMove(null);
+      setIsSearching(true);
     }
+    workerRef.current.postMessage(trimmed);
   }, []);
 
   const setOption = useCallback((name: string, value: string | number | boolean) => {
@@ -269,7 +293,7 @@ export const useBerserkerEngine = (): UseBerserkerEngineReturn & {
   }, [setOption]);
 
   const setHashSize = useCallback((mb: number) => {
-    const clamped = Math.max(16, Math.min(65536, mb));
+    const clamped = Math.max(16, Math.min(64, mb));
     setEngineConfig((prev) => ({ ...prev, hashMb: clamped }));
     setOption('Hash', clamped);
   }, [setOption]);
@@ -283,7 +307,6 @@ export const useBerserkerEngine = (): UseBerserkerEngineReturn & {
   const setContempt = useCallback((contemptCp: number) => {
     const clamped = Math.max(-100, Math.min(100, contemptCp));
     setEngineConfig((prev) => ({ ...prev, contempt: clamped }));
-    setOption('Contempt', clamped);
     setOption('TacticalContempt', clamped);
   }, [setOption]);
 
@@ -293,33 +316,51 @@ export const useBerserkerEngine = (): UseBerserkerEngineReturn & {
     setOption('KingAttackScale', clamped);
   }, [setOption]);
 
-  const startSearch = useCallback((fen: string, movetimeMs = 3000) => {
-    if (!workerRef.current) return;
-    setIsSearching(true);
+  const resetSearchTelemetry = useCallback(() => {
     bestMoveRef.current = null;
+    searchInfoRef.current = { ...INITIAL_SEARCH_INFO };
+    multiPvMapRef.current.clear();
+    multiPvCandidatesRef.current = [];
     setBestMove(null);
     setPonderMove(null);
-    multiPvMapRef.current.clear();
+    setSearchInfo({ ...INITIAL_SEARCH_INFO });
     setMultiPvCandidates([]);
+  }, []);
 
-    workerRef.current.postMessage('stop');
-    workerRef.current.postMessage(`position fen ${fen}`);
+  const startSearch = useCallback((
+    fen: string,
+    movetimeMs = 3000,
+    uciMoves?: string[],
+    startFen?: string
+  ) => {
+    if (!workerRef.current) return;
+    resetSearchTelemetry();
+    setIsSearching(true);
+
+    if (outstandingGoRef.current > 0) {
+      workerRef.current.postMessage('stop');
+    }
+    outstandingGoRef.current += 1;
+    workerRef.current.postMessage(buildPositionCommand(fen, uciMoves, startFen));
     workerRef.current.postMessage(`go movetime ${movetimeMs}`);
-  }, []);
+  }, [resetSearchTelemetry]);
 
-  const startInfiniteSearch = useCallback((fen: string) => {
+  const startInfiniteSearch = useCallback((
+    fen: string,
+    uciMoves?: string[],
+    startFen?: string
+  ) => {
     if (!workerRef.current) return;
+    resetSearchTelemetry();
     setIsSearching(true);
-    bestMoveRef.current = null;
-    setBestMove(null);
-    setPonderMove(null);
-    multiPvMapRef.current.clear();
-    setMultiPvCandidates([]);
 
-    workerRef.current.postMessage('stop');
-    workerRef.current.postMessage(`position fen ${fen}`);
+    if (outstandingGoRef.current > 0) {
+      workerRef.current.postMessage('stop');
+    }
+    outstandingGoRef.current += 1;
+    workerRef.current.postMessage(buildPositionCommand(fen, uciMoves, startFen));
     workerRef.current.postMessage('go infinite');
-  }, []);
+  }, [resetSearchTelemetry]);
 
   const stopSearch = useCallback(() => {
     if (workerRef.current) {
@@ -329,6 +370,7 @@ export const useBerserkerEngine = (): UseBerserkerEngineReturn & {
 
   return {
     isReady,
+    isNnueReady,
     isSearching,
     searchInfo,
     bestMove,
@@ -340,6 +382,7 @@ export const useBerserkerEngine = (): UseBerserkerEngineReturn & {
     startInfiniteSearch,
     stopSearch,
     sendCommand,
+    clearLogs,
     setOption,
     setMultiPv,
     setHashSize,
@@ -352,5 +395,4 @@ export const useBerserkerEngine = (): UseBerserkerEngineReturn & {
   };
 };
 
-// Aliases for backwards-compatibility
 export const useStockfish = useBerserkerEngine;

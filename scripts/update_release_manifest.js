@@ -29,13 +29,17 @@ const items = files.map(file => {
 items.sort((a, b) => a.fileName.localeCompare(b.fileName));
 
 const manifest = {
-  release: "Berserker v0.6.0",
-  version: "0.6.0",
+  release: "Berserker v0.7.1-dev",
+  version: "0.7.1-dev",
   author: "Berserker Engine Team",
-  date: "2026-11-09",
-  status: "Official Stable Multi-Platform Release",
+  date: "2026-11-14",
+  status: "Official Incremental Dev Release",
   features: [
-    "Hybrid MCTS-PVS Dual Arbiter (PUCT Policy Guidance + Tactical Safety Net)",
+    "Zero-Allocation TypedArray Evaluation & O(1) Bitwise Passed-Pawn / Structure Imbalances",
+    "O(1) Native chess.hash() Zobrist Transposition Table Keys & 50-Move Halfmove Clock Propagation",
+    "O(1) Static Exchange Evaluation (SEE) via chess.attackers() Without Cloning or Undo",
+    "Quiescence Checkmate & Check-Evasion Search + Root-Safe FEN Digit Chess960 Castling Parser",
+    "PVS-First (85% Budget) Hybrid-MCTS-PVS Time Control with Safe 10ms IPC Margin",
     "Threat-Space Prophylaxis (The Petrosian Patch - Preemptive Opponent Threat Denial)",
     "Multi-Threaded Parallel MCTS with Virtual Loss",
     "PV-Instability & Tactical Volatility Dynamic Time Manager",

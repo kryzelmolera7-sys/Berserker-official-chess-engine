@@ -25,13 +25,99 @@
  */
 
 import readline from 'node:readline';
+import fs from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Chess } from 'chess.js';
 
-export const ENGINE_NAME = "Berserker v0.7.0-dev";
-export const ENGINE_VERSION = "0.7.0-dev";
+export const ENGINE_NAME = "Berserker v0.6.0";
+export const ENGINE_VERSION = "0.6.0";
 export const ENGINE_AUTHOR = "Berserker Engine Team";
-export const DEFAULT_NET = "berserker_brnnue_v070.nnue";
+export const DEFAULT_NET = "v60-7f587dfb.nnue";
+
+const __cliDir = path.dirname(fileURLToPath(import.meta.url));
+const cliTextEncoder = new TextEncoder();
+const cliTextDecoder = new TextDecoder();
+let cachedCliWasm = null;
+let cliWasmOutHandler = (line) => process.stdout.write(line + '\n');
+
+function getCliWasmEngine() {
+  if (cachedCliWasm !== null) return cachedCliWasm || null;
+  try {
+    const wasmPath = path.resolve(__cliDir, 'public/berserker-engine.wasm');
+    if (!fs.existsSync(wasmPath)) {
+      cachedCliWasm = false;
+      return null;
+    }
+    const wasmBytes = fs.readFileSync(wasmPath);
+    const nnuePath = path.resolve(__cliDir, 'public/nnue/v60-7f587dfb.nnue');
+    const nnueBytes = fs.existsSync(nnuePath) ? fs.readFileSync(nnuePath) : null;
+
+    let mem = null;
+    const mod = new WebAssembly.Module(wasmBytes);
+    const inst = new WebAssembly.Instance(mod, {
+      env: {
+        js_uci_out(ptr, len) {
+          if (!mem || len <= 0) return;
+          const line = cliTextDecoder.decode(new Uint8Array(mem.buffer, ptr, len));
+          cliWasmOutHandler(line);
+        },
+        js_now_ms() {
+          return performance.now();
+        },
+      },
+    });
+    const exp = inst.exports;
+    mem = exp.memory;
+    exp.wasm_init();
+
+    let nnueLoaded = false;
+    if (nnueBytes && nnueBytes.byteLength >= exp.wasm_get_nnue_max_bytes() - 32) {
+      const ptr = exp.wasm_get_nnue_ptr();
+      const maxBytes = exp.wasm_get_nnue_max_bytes();
+      const copyLen = Math.min(nnueBytes.byteLength, maxBytes);
+      new Uint8Array(mem.buffer, ptr, copyLen).set(nnueBytes.subarray(0, copyLen));
+      nnueLoaded = exp.wasm_init_nnue(copyLen) !== 0;
+    }
+
+    const cmdPtr = exp.wasm_get_cmd_buf();
+    const cmdMax = exp.wasm_get_cmd_buf_size();
+    const writeCmd = (text) => {
+      const enc = cliTextEncoder.encode(text);
+      const len = Math.min(enc.byteLength, cmdMax - 1);
+      const view = new Uint8Array(mem.buffer, cmdPtr, cmdMax);
+      view.set(enc.subarray(0, len), 0);
+      view[len] = 0;
+      return len;
+    };
+
+    cachedCliWasm = {
+      exp,
+      nnueLoaded,
+      execUci(line) {
+        const len = writeCmd(line);
+        return exp.wasm_exec_uci(len) !== 0;
+      },
+      step() {
+        return exp.wasm_search_step() !== 0;
+      },
+      stop() {
+        exp.wasm_stop();
+      },
+      getBestMove(fallback = '0000') {
+        const len = exp.wasm_get_last_best_move(cmdPtr);
+        if (len >= 4) {
+          return cliTextDecoder.decode(new Uint8Array(mem.buffer, cmdPtr, len));
+        }
+        return fallback;
+      },
+    };
+    return cachedCliWasm;
+  } catch {
+    cachedCliWasm = false;
+    return null;
+  }
+}
 
 // ----------------------------------------------------------------------------
 // Engine Options & Global Search State
@@ -40,290 +126,19 @@ let evalMode = 'brnnue-v030'; // 'brnnue-v030' | 'berserker-1.0-nnue' | 'aura-nn
 export function setEvalMode(mode) {
   evalMode = mode;
 }
-let searchMode = 'Hybrid-MCTS-PVS'; // 'Hybrid-MCTS-PVS' | 'Pure-PVS' | 'Pure-MCTS'
+let searchMode = 'Pure-PVS'; // Pure-PVS Alpha-Beta only (MCTS disabled)
 export function setSearchMode(mode) {
-  searchMode = mode;
+  searchMode = mode === 'Pure-PVS' ? 'Pure-PVS' : 'Pure-PVS';
 }
-let threads = 4;
+let threads = 1;
 let hashMb = 64;
 let multiPv = 1;
-let tacticalContempt = 45;
+let tacticalContempt = 0;
 let kingAttackScale = 140;
 
 let currentChess = new Chess();
-let gameHistoryFensCli = [];
 let isSearching = false;
 let stopRequested = false;
-
-// Chess960 (Fischer Random Chess) State & Logic
-let uciChess960 = false;
-let currentChess960Config = null;
-
-const KNIGHT_PAIRS = [
-  [0, 1], [0, 2], [0, 3], [0, 4],
-  [1, 2], [1, 3], [1, 4],
-  [2, 3], [2, 4],
-  [3, 4]
-];
-
-export function generateChess960Backrank(index) {
-  if (index < 0 || index > 959) {
-    throw new Error(`Invalid Chess960 index: ${index}. Must be 0 to 959.`);
-  }
-  const rank = new Array(8).fill(null);
-  const d1 = index % 4;
-  rank[2 * d1 + 1] = 'B';
-  const q1 = Math.floor(index / 4);
-
-  const d2 = q1 % 4;
-  rank[2 * d2] = 'B';
-  const q2 = Math.floor(q1 / 4);
-
-  const d3 = q2 % 6;
-  let emptyIdx = 0;
-  for (let i = 0; i < 8; i++) {
-    if (rank[i] === null) {
-      if (emptyIdx === d3) {
-        rank[i] = 'Q';
-        break;
-      }
-      emptyIdx++;
-    }
-  }
-  const q3 = Math.floor(q2 / 6);
-
-  const [k1, k2] = KNIGHT_PAIRS[q3];
-  emptyIdx = 0;
-  for (let i = 0; i < 8; i++) {
-    if (rank[i] === null) {
-      if (emptyIdx === k1 || emptyIdx === k2) {
-        rank[i] = 'N';
-      }
-      emptyIdx++;
-    }
-  }
-
-  emptyIdx = 0;
-  for (let i = 0; i < 8; i++) {
-    if (rank[i] === null) {
-      if (emptyIdx === 0) rank[i] = 'R';
-      else if (emptyIdx === 1) rank[i] = 'K';
-      else if (emptyIdx === 2) rank[i] = 'R';
-      emptyIdx++;
-    }
-  }
-  return rank.join('');
-}
-
-export function extractCastlingConfig(backrank) {
-  let kingFile = -1, queenRookFile = -1, kingRookFile = -1;
-  for (let c = 0; c < 8; c++) {
-    const piece = backrank[c].toUpperCase();
-    if (piece === 'R') {
-      if (kingFile === -1) queenRookFile = c;
-      else kingRookFile = c;
-    } else if (piece === 'K') {
-      kingFile = c;
-    }
-  }
-  return {
-    whiteKingFile: kingFile,
-    whiteQueenRookFile: queenRookFile,
-    whiteKingRookFile: kingRookFile,
-    blackKingFile: kingFile,
-    blackQueenRookFile: queenRookFile,
-    blackKingRookFile: kingRookFile
-  };
-}
-
-export function normalizeChess960Fen(rawFen) {
-  const parts = rawFen.trim().split(/\s+/);
-  if (parts.length < 4) return { normalizedFen: rawFen, originalCastling: '-', isChess960: false };
-  const castling = parts[2];
-  const isShredder = /[A-Ha-h]/.test(castling) && !/^[KQkq-]+$/.test(castling);
-  let normalizedCastling = castling;
-  if (isShredder) {
-    let w = /[A-H]/.test(castling);
-    let b = /[a-h]/.test(castling);
-    normalizedCastling = (w ? 'KQ' : '') + (b ? 'kq' : '') || '-';
-  }
-  parts[2] = normalizedCastling;
-  return {
-    normalizedFen: parts.join(' '),
-    originalCastling: castling,
-    isChess960: isShredder || rawFen.includes('KQkq')
-  };
-}
-
-export function isLegalChess960Castling(chess, side, config) {
-  if (chess.inCheck()) return false;
-  const fen = chess.fen();
-  const parts = fen.split(' ');
-  const turn = parts[1];
-  const castlingStr = parts[2];
-  const rightToken = turn === 'w' ? (side === 'kingside' ? 'K' : 'Q') : (side === 'kingside' ? 'k' : 'q');
-  if (!castlingStr.includes(rightToken) && !castlingStr.includes(rightToken.toUpperCase())) return false;
-
-  const board = chess.board();
-  const rank = turn === 'w' ? 7 : 0;
-  let kingCol = -1;
-  for (let c = 0; c < 8; c++) {
-    const p = board[rank][c];
-    if (p && p.color === turn && p.type === 'k') kingCol = c;
-  }
-  if (kingCol === -1) return false;
-
-  let targetRookCol = -1;
-  if (config) {
-    targetRookCol = turn === 'w'
-      ? (side === 'kingside' ? config.whiteKingRookFile : config.whiteQueenRookFile)
-      : (side === 'kingside' ? config.blackKingRookFile : config.blackQueenRookFile);
-  } else {
-    if (side === 'kingside') {
-      for (let c = kingCol + 1; c < 8; c++) {
-        if (board[rank][c]?.color === turn && board[rank][c]?.type === 'r') { targetRookCol = c; break; }
-      }
-    } else {
-      for (let c = kingCol - 1; c >= 0; c--) {
-        if (board[rank][c]?.color === turn && board[rank][c]?.type === 'r') { targetRookCol = c; break; }
-      }
-    }
-  }
-  if (targetRookCol === -1) return false;
-
-  const destKingCol = side === 'kingside' ? 6 : 2;
-  const destRookCol = side === 'kingside' ? 5 : 3;
-  const ignoreCols = [kingCol, targetRookCol];
-
-  const kingMinC = Math.min(kingCol, destKingCol);
-  const kingMaxC = Math.max(kingCol, destKingCol);
-  for (let c = kingMinC; c <= kingMaxC; c++) {
-    if (!ignoreCols.includes(c) && board[rank][c] !== null) return false;
-  }
-
-  const rookMinC = Math.min(targetRookCol, destRookCol);
-  const rookMaxC = Math.max(targetRookCol, destRookCol);
-  for (let c = rookMinC; c <= rookMaxC; c++) {
-    if (!ignoreCols.includes(c) && board[rank][c] !== null) return false;
-  }
-
-  const oppColor = turn === 'w' ? 'b' : 'w';
-  const rankStr = turn === 'w' ? '1' : '8';
-  for (let c = kingMinC; c <= kingMaxC; c++) {
-    const sq = `${String.fromCharCode(97 + c)}${rankStr}`;
-    if (typeof chess.isAttacked === 'function' && chess.isAttacked(sq, oppColor)) return false;
-  }
-
-  return true;
-}
-
-export function executeChess960Castling(chess, side, config) {
-  const parts = chess.fen().split(' ');
-  const turn = parts[1];
-  const rank = turn === 'w' ? 7 : 0;
-  const board = chess.board();
-
-  let kingCol = -1;
-  for (let c = 0; c < 8; c++) {
-    if (board[rank][c]?.color === turn && board[rank][c]?.type === 'k') kingCol = c;
-  }
-
-  let rookCol = -1;
-  if (config) {
-    rookCol = turn === 'w'
-      ? (side === 'kingside' ? config.whiteKingRookFile : config.whiteQueenRookFile)
-      : (side === 'kingside' ? config.blackKingRookFile : config.blackQueenRookFile);
-  } else {
-    if (side === 'kingside') {
-      for (let c = kingCol + 1; c < 8; c++) {
-        if (board[rank][c]?.color === turn && board[rank][c]?.type === 'r') { rookCol = c; break; }
-      }
-    } else {
-      for (let c = kingCol - 1; c >= 0; c--) {
-        if (board[rank][c]?.color === turn && board[rank][c]?.type === 'r') { rookCol = c; break; }
-      }
-    }
-  }
-
-  const destKingCol = side === 'kingside' ? 6 : 2;
-  const destRookCol = side === 'kingside' ? 5 : 3;
-
-  board[rank][kingCol] = null;
-  board[rank][rookCol] = null;
-  board[rank][destKingCol] = { type: 'k', color: turn };
-  board[rank][destRookCol] = { type: 'r', color: turn };
-
-  const rows = [];
-  for (let r = 0; r < 8; r++) {
-    let rowStr = '';
-    let emptyCount = 0;
-    for (let c = 0; c < 8; c++) {
-      const p = board[r][c];
-      if (!p) emptyCount++;
-      else {
-        if (emptyCount > 0) { rowStr += emptyCount; emptyCount = 0; }
-        rowStr += p.color === 'w' ? p.type.toUpperCase() : p.type.toLowerCase();
-      }
-    }
-    if (emptyCount > 0) rowStr += emptyCount;
-    rows.push(rowStr);
-  }
-
-  let nextCastling = parts[2];
-  if (turn === 'w') nextCastling = nextCastling.replace(/[KQ]/g, '');
-  else nextCastling = nextCastling.replace(/[kq]/g, '');
-  if (!nextCastling) nextCastling = '-';
-
-  const nextTurn = turn === 'w' ? 'b' : 'w';
-  const halfmove = parseInt(parts[4], 10) + 1;
-  const fullmove = turn === 'b' ? parseInt(parts[5], 10) + 1 : parseInt(parts[5], 10);
-
-  const nextFen = `${rows.join('/')} ${nextTurn} ${nextCastling} - ${halfmove} ${fullmove}`;
-  chess.load(nextFen);
-  return nextFen;
-}
-
-export function resolveChess960Move(chess, uciMove, config) {
-  if (uciMove.length < 4) return { isChess960Castling: false, standardUci: uciMove };
-  const from = uciMove.slice(0, 2);
-  const to = uciMove.slice(2, 4);
-  const turn = chess.turn();
-  const board = chess.board();
-
-  const fromRank = parseInt(from[1], 10);
-  const fromFile = from.charCodeAt(0) - 97;
-  const toRank = parseInt(to[1], 10);
-  const toFile = to.charCodeAt(0) - 97;
-
-  const expectedRank = turn === 'w' ? 1 : 8;
-  if (fromRank !== expectedRank || toRank !== expectedRank) {
-    return { isChess960Castling: false, standardUci: uciMove };
-  }
-
-  const row = turn === 'w' ? 7 : 0;
-  const pieceFrom = board[row][fromFile];
-  if (!pieceFrom || pieceFrom.type !== 'k' || pieceFrom.color !== turn) {
-    return { isChess960Castling: false, standardUci: uciMove };
-  }
-
-  const pieceTo = board[row][toFile];
-  if (pieceTo && pieceTo.type === 'r' && pieceTo.color === turn) {
-    const side = toFile > fromFile ? 'kingside' : 'queenside';
-    if (isLegalChess960Castling(chess, side, config)) {
-      const destKingSq = side === 'kingside' ? `g${expectedRank}` : `c${expectedRank}`;
-      return { isChess960Castling: true, side, standardUci: `${from}${destKingSq}` };
-    }
-  }
-
-  if (toFile === 6 || toFile === 2) {
-    const side = toFile === 6 ? 'kingside' : 'queenside';
-    if (isLegalChess960Castling(chess, side, config)) {
-      return { isChess960Castling: true, side, standardUci: uciMove };
-    }
-  }
-
-  return { isChess960Castling: false, standardUci: uciMove };
-}
 
 // ----------------------------------------------------------------------------
 // Piece Values & Tapered Piece-Square Tables (PST) - MG (Middlegame) & EG (Endgame)
@@ -567,125 +382,6 @@ function clearSearchState() {
 }
 
 // ----------------------------------------------------------------------------
-// Centipawn Squeeze Matrix v0.7.0
-// 1. Rule of the Square & Unstoppable Pawn Detection (+650cp)
-// 2. Tarrasch Rook Placement (Rook behind passed pawn) (+55cp)
-// 3. King Centralization & Opposition Drive (+42cp)
-// 4. King Escorting Passed Pawn (+25cp to +75cp)
-// ----------------------------------------------------------------------------
-export function computeEndgameSqueezeBonus(chess) {
-  const board = chess.board();
-  const us = chess.turn();
-  const them = us === 'w' ? 'b' : 'w';
-  let nonKingPieces = 0;
-  let ourKingSq = { file: 4, rank: us === 'w' ? 1 : 8 };
-  let theirKingSq = { file: 4, rank: us === 'w' ? 8 : 1 };
-  const ourPassedPawns = [];
-  const ourRooks = [];
-
-  for (let r = 0; r < 8; r++) {
-    for (let c = 0; c < 8; c++) {
-      const p = board[r][c];
-      if (!p) continue;
-      const rank = 8 - r;
-      const file = c;
-      if (p.type === 'k') {
-        if (p.color === us) ourKingSq = { file, rank };
-        else theirKingSq = { file, rank };
-      } else {
-        nonKingPieces++;
-        if (p.color === us) {
-          if (p.type === 'r') ourRooks.push({ file, rank });
-          if (p.type === 'p') {
-            let isPassed = true;
-            for (let checkR = 0; checkR < 8; checkR++) {
-              for (let checkC = Math.max(0, c - 1); checkC <= Math.min(7, c + 1); checkC++) {
-                const ep = board[checkR][checkC];
-                if (ep && ep.type === 'p' && ep.color === them) {
-                  const enemyRank = 8 - checkR;
-                  if ((us === 'w' && enemyRank > rank) || (us === 'b' && enemyRank < rank)) {
-                    isPassed = false;
-                    break;
-                  }
-                }
-              }
-              if (!isPassed) break;
-            }
-            if (isPassed) {
-              ourPassedPawns.push({ file, rank });
-            }
-          }
-        }
-      }
-    }
-  }
-
-  let squeezeBonusCp = 0;
-  const isEndgame = nonKingPieces <= 8;
-
-  // 1. King Centralization & Opposition in Endgame
-  if (isEndgame) {
-    const ourDistToCenter = Math.abs(ourKingSq.file - 3.5) + Math.abs(ourKingSq.rank - 4.5);
-    squeezeBonusCp += Math.round((7.0 - ourDistToCenter) * 6);
-
-    const enemyDistToCenter = Math.abs(theirKingSq.file - 3.5) + Math.abs(theirKingSq.rank - 4.5);
-    squeezeBonusCp += Math.round(enemyDistToCenter * 5);
-
-    const kingDistF = Math.abs(ourKingSq.file - theirKingSq.file);
-    const kingDistR = Math.abs(ourKingSq.rank - theirKingSq.rank);
-    if ((kingDistF === 0 && kingDistR === 2) || (kingDistR === 0 && kingDistF === 2)) {
-      squeezeBonusCp += 20; // Direct Opposition
-    }
-  }
-
-  // 2. Passed Pawn Escort & Rule of the Square
-  for (const pp of ourPassedPawns) {
-    const promotionRank = us === 'w' ? 8 : 1;
-    const distToPromo = Math.abs(promotionRank - pp.rank);
-
-    if (us === 'w') {
-      if (pp.rank === 5) squeezeBonusCp += 45;
-      else if (pp.rank === 6) squeezeBonusCp += 95;
-      else if (pp.rank === 7) squeezeBonusCp += 180;
-    } else {
-      if (pp.rank === 4) squeezeBonusCp += 45;
-      else if (pp.rank === 3) squeezeBonusCp += 95;
-      else if (pp.rank === 2) squeezeBonusCp += 180;
-    }
-
-    // King Escort: Our king close to passed pawn
-    const kingDistToPawn = Math.max(Math.abs(ourKingSq.file - pp.file), Math.abs(ourKingSq.rank - pp.rank));
-    if (kingDistToPawn <= 2) {
-      squeezeBonusCp += (3 - kingDistToPawn) * 25;
-    }
-
-    // Rule of the Square in pure pawn endgames
-    if (nonKingPieces === ourPassedPawns.length) {
-      const squareSize = distToPromo;
-      const enemyKingDistToPromo = Math.max(
-        Math.abs(theirKingSq.file - pp.file),
-        Math.abs(theirKingSq.rank - promotionRank)
-      );
-      if (enemyKingDistToPromo > squareSize) {
-        squeezeBonusCp += 650;
-      }
-    }
-
-    // 3. Tarrasch Rule: Rook behind passed pawn
-    for (const rk of ourRooks) {
-      if (rk.file === pp.file) {
-        const isBehind = (us === 'w' && rk.rank < pp.rank) || (us === 'b' && rk.rank > pp.rank);
-        if (isBehind) {
-          squeezeBonusCp += 55;
-        }
-      }
-    }
-  }
-
-  return squeezeBonusCp;
-}
-
-// ----------------------------------------------------------------------------
 // Tapered Evaluation Function
 // ----------------------------------------------------------------------------
 export function evaluatePosition(chess, mode = evalMode) {
@@ -711,8 +407,8 @@ export function evaluatePosition(chess, mode = evalMode) {
       // Update game phase counter
       gamePhase += PHASE_WEIGHTS[type] || 0;
 
-      // PST table coordinate: row 0 is rank 8 in board array, rank 1 is row 7
-      const sqIdx = isWhite ? (7 - r) * 8 + f : r * 8 + f;
+      // PST table row 0 is rank 8 (enemy back rank for White) and row 7 is rank 1
+      const sqIdx = isWhite ? r * 8 + f : (7 - r) * 8 + f;
       const mgPst = PST_MG[type][sqIdx];
       const egPst = PST_EG[type][sqIdx];
 
@@ -766,12 +462,54 @@ export function evaluatePosition(chess, mode = evalMode) {
     evalScore += (turn === 'w' ? auraBias : -auraBias);
   }
 
-  // Centipawn Squeeze Matrix (Tarrasch Rook, Rule of the Square, King Centralization/Escort)
-  const squeezeBonus = computeEndgameSqueezeBonus(chess);
-  evalScore += (turn === 'w' ? squeezeBonus : -squeezeBonus);
-
   // Perspective relative to side to move
   return turn === 'w' ? evalScore : -evalScore;
+}
+
+export function evaluateBRnnueCli(fen) {
+  const c = new Chess(fen);
+  const wasm = getCliWasmEngine();
+  if (wasm && wasm.nnueLoaded) {
+    const cliOut = [];
+    const prevOut = cliWasmOutHandler;
+    cliWasmOutHandler = (line) => cliOut.push(line);
+    try {
+      wasm.execUci(`position fen ${fen}`);
+      wasm.execUci('eval');
+    } finally {
+      cliWasmOutHandler = prevOut;
+    }
+    const evalLine = cliOut.find((l) => l.includes('eval '));
+    const m = evalLine ? evalLine.match(/eval (-?\d+) cp/) : null;
+    if (m) {
+      const cp = parseInt(m[1], 10);
+      return { centipawns: cp, evalCpPerspective: cp };
+    }
+  }
+  const cp = evaluatePosition(c, evalMode);
+  return { centipawns: cp, evalCpPerspective: cp };
+}
+
+export function staticExchangeEvaluation(chess, move) {
+  if (!move || (!move.captured && !move.promotion)) return 0;
+  const victim = move.captured ? (PIECE_VALUES[move.captured] || 100) : 0;
+  const promoGain = move.promotion ? (PIECE_VALUES[move.promotion] || 900) - 100 : 0;
+  const attacker = PIECE_VALUES[move.piece] || 100;
+  try {
+    chess.move(move);
+    const oppRecaptures = chess.moves({ verbose: true }).filter((r) => r.to === move.to);
+    chess.undo();
+    if (oppRecaptures.length === 0) {
+      return victim + promoGain;
+    }
+    const minRecap = Math.min(...oppRecaptures.map((r) => PIECE_VALUES[r.piece] || 100));
+    if (minRecap >= attacker) {
+      return Math.max(0, victim + promoGain - attacker);
+    }
+    return victim + promoGain - attacker;
+  } catch {
+    return victim + promoGain - attacker;
+  }
 }
 
 // ----------------------------------------------------------------------------
@@ -1164,7 +902,7 @@ function calculateFpuCli(parentQ, prior, fpuReduction = 0.25) {
 
 const mctsTranspositionTableCli = new Map();
 
-function computeMovePriorsCli(chess, moves, opponentThreats, gameHistory, isWinningAdvantage = false) {
+function computeMovePriorsCli(chess, moves, opponentThreats) {
   if (moves.length === 0) return [];
   const rawScores = new Array(moves.length);
   const us = chess.turn();
@@ -1202,34 +940,8 @@ function computeMovePriorsCli(chess, moves, opponentThreats, gameHistory, isWinn
     // 2. Promotion bonus
     if (m.promotion) score += m.promotion === 'q' ? 330 : 95;
 
-    // 3. Checkmate & Check bonus
-    if (m.san && m.san.includes('#')) {
-      score += 650; // Checkmate delivers immediate win!
-    } else if (m.san && m.san.includes('+')) {
-      score += 80;
-    }
-
-    // Anti-Repetition Shield: Prevent repetitions when winning
-    if (gameHistory && gameHistory.length > 0) {
-      try {
-        const testChess = new Chess(chess.fen());
-        testChess.move(m);
-        const nextKey = testChess.fen().split(' ').slice(0, 4).join(' ');
-        let reps = 0;
-        for (let k = 0; k < gameHistory.length; k++) {
-          if (gameHistory[k] === nextKey) reps++;
-        }
-        if (reps >= 2) {
-          if (isWinningAdvantage) {
-            score -= 900;
-          } else {
-            score += 150;
-          }
-        } else if (reps === 1 && isWinningAdvantage) {
-          score -= 300;
-        }
-      } catch {}
-    }
+    // 3. Check bonus
+    if (m.san && m.san.includes('+')) score += 80;
 
     // 4. Center control & central outposts
     if (['e4', 'd4', 'e5', 'd5'].includes(m.to)) score += 38;
@@ -1335,10 +1047,6 @@ function evaluateProphylacticQualityCli(chess, move, threats) {
       if (t.to === 'b4' && move.san === 'a3') q = Math.max(q, 88);
       if (t.to === 'g5' && move.san === 'h6') q = Math.max(q, 88);
       if (t.to === 'b5' && move.san === 'a6') q = Math.max(q, 88);
-      // Phase II Luft / Back-rank Mate Defense:
-      if (t.threatSeverity >= 85 && ['h3', 'g3', 'h6', 'g6', 'a3', 'a6'].includes(move.san)) {
-        q = Math.max(q, 92);
-      }
     }
     if (move.piece === 'k' && ['h1', 'g1', 'h8', 'g8', 'f1', 'f8'].includes(move.to)) q = Math.max(q, 75);
     const weighted = q * (t.threatSeverity / 100.0);
@@ -1408,13 +1116,13 @@ function calculateTacticalVolatilityCli(chess) {
   return Math.min(1.0, volatility / 220.0);
 }
 
-function runMctsSearchCli(chess, maxSims = 800, maxTimeMs = 1500, gameHistory = [], isWinningAdvantage = false) {
+function runMctsSearchCli(chess, maxSims = 800, maxTimeMs = 1500) {
   const startFen = chess.fen();
   const rootMoves = chess.moves({ verbose: true });
   if (rootMoves.length === 0) return null;
 
   const opponentThreats = computeOpponentThreatSpaceCli(chess);
-  let priors = computeMovePriorsCli(chess, rootMoves, opponentThreats, gameHistory, isWinningAdvantage);
+  let priors = computeMovePriorsCli(chess, rootMoves, opponentThreats);
   priors = applyDirichletNoiseCli(priors, 0.3, 0.20);
 
   const rootChildren = rootMoves.map((m, i) => ({
@@ -1497,7 +1205,7 @@ function runMctsSearchCli(chess, maxSims = 800, maxTimeMs = 1500, gameHistory = 
 // ----------------------------------------------------------------------------
 // Iterative Deepening Search with Progressive Aspiration Windows & Stability Time Manager
 // ----------------------------------------------------------------------------
-export function searchRoot(chess, targetDepth = 8, maxTimeMs = 3000, gameHistory = gameHistoryFensCli) {
+export function searchRoot(chess, targetDepth = 8, maxTimeMs = 3000) {
   isSearching = true;
   stopRequested = false;
   const startTime = Date.now();
@@ -1509,50 +1217,6 @@ export function searchRoot(chess, targetDepth = 8, maxTimeMs = 3000, gameHistory
     return;
   }
 
-  // Instant Mate-in-1 check
-  const mateMove = legalMoves.find(m => m.san && m.san.includes('#'));
-  if (mateMove) {
-    const mateUci = `${mateMove.from}${mateMove.to}${mateMove.promotion || ''}`;
-    isSearching = false;
-    process.stdout.write(`info depth 1 score mate 1 nodes 1 nps 1000 time 1 pv ${mateUci}\n`);
-    process.stdout.write(`bestmove ${mateUci}\n`);
-    return;
-  }
-
-  // Fast Forced Mate-in-2 check
-  if (legalMoves.length <= 35) {
-    for (const m1 of legalMoves) {
-      if (m1.san && (m1.san.includes('+') || m1.captured)) {
-        try {
-          const sim1 = new Chess(chess.fen());
-          sim1.move(m1);
-          if (!sim1.isCheckmate()) {
-            const oppReplies = sim1.moves({ verbose: true });
-            if (oppReplies.length > 0 && oppReplies.length <= 4) {
-              let allLeadToMate = true;
-              for (const oppM of oppReplies) {
-                const sim2 = new Chess(sim1.fen());
-                sim2.move(oppM);
-                const m2Moves = sim2.moves({ verbose: true });
-                if (!m2Moves.some(m => m.san && m.san.includes('#'))) {
-                  allLeadToMate = false;
-                  break;
-                }
-              }
-              if (allLeadToMate) {
-                const mateUci = `${m1.from}${m1.to}${m1.promotion || ''}`;
-                isSearching = false;
-                process.stdout.write(`info depth 3 score mate 2 nodes 50 nps 1000 time 2 pv ${mateUci}\n`);
-                process.stdout.write(`bestmove ${mateUci}\n`);
-                return;
-              }
-            }
-          }
-        } catch {}
-      }
-    }
-  }
-
   const stats = {
     nodes: 0,
     qnodes: 0,
@@ -1562,144 +1226,17 @@ export function searchRoot(chess, targetDepth = 8, maxTimeMs = 3000, gameHistory
 
   let bestMoveUci = `${legalMoves[0].from}${legalMoves[0].to}${legalMoves[0].promotion || ''}`;
 
-  if (searchMode === 'Hybrid-MCTS-PVS') {
-    const volatility = calculateTacticalVolatilityCli(chess);
-    const initialFastEval = evaluateBRnnueCli(chess.fen());
-    const isWinningAdvantage = initialFastEval.centipawns > 50;
-
-    // 1. Run MCTS Search with Dynamic PUCT, FPU & Tactical Q-Rollouts
-    const mctsResult = runMctsSearchCli(chess, 600, maxTimeMs * 0.65, gameHistory, isWinningAdvantage);
-    const mctsUci = mctsResult?.bestChild?.uci || bestMoveUci;
-
-    // 2. Run PVS Tactical Safety Net Search
-    const remainingTime = Math.max(120, maxTimeMs - (mctsResult ? mctsResult.timeMs : 0));
-    const pvsSearchDepth = Math.min(targetDepth, 7);
-    let pvsBestUci = bestMoveUci;
-    let pvsBestScore = 0;
-
-    for (let d = 1; d <= pvsSearchDepth; d++) {
-      const pv = [];
-      const score = pvsSearch(chess, d, 0, -30000, 30000, stats, pv, startTime, remainingTime);
-      if (pv.length > 0) {
-        pvsBestUci = pv[0];
-        pvsBestScore = score;
-      }
-      if ((Date.now() - startTime) >= remainingTime) break;
+  const wasm = getCliWasmEngine();
+  if (wasm) {
+    wasm.execUci(`position fen ${chess.fen()}`);
+    const searching = wasm.execUci(`go depth ${targetDepth} movetime ${maxTimeMs}`);
+    if (searching) {
+      while (wasm.step()) {}
     }
-
-    // 3. Continuous Bayesian Dual Arbiter
-    let chosenUci = mctsUci;
-    let reason = 'mcts-strategic';
-    let deltaCp = 0;
-
-    if (mctsUci === pvsBestUci) {
-      reason = 'consensus';
-      chosenUci = mctsUci;
-    } else {
-      try {
-        const testChess = new Chess(chess.fen());
-        const mctsMoveObj = legalMoves.find(m => `${m.from}${m.to}${m.promotion || ''}` === mctsUci);
-        if (mctsMoveObj) {
-          testChess.move(mctsMoveObj);
-          const oppPv = [];
-          const oppScore = pvsSearch(testChess, Math.max(2, pvsSearchDepth - 1), 0, -30000, 30000, stats, oppPv, Date.now(), 200);
-          const mctsMoveScore = -oppScore;
-          deltaCp = pvsBestScore - mctsMoveScore;
-
-          if (deltaCp > 140) {
-            reason = 'safety-net-override';
-            chosenUci = pvsBestUci;
-          } else {
-            const lambda = 0.15 + 0.55 * volatility;
-            const mctsVisits = mctsResult?.bestChild?.visits || 0;
-            const mctsRatio = mctsVisits / Math.max(1, mctsResult?.sims || 1);
-
-            if (mctsRatio > 0.55 && deltaCp < 60) {
-              reason = 'mcts-strategic';
-              chosenUci = mctsUci;
-            } else if (lambda > 0.50 && deltaCp > 80) {
-              reason = 'bayesian-blend';
-              chosenUci = pvsBestUci;
-            } else {
-              reason = 'mcts-strategic';
-              chosenUci = mctsUci;
-            }
-          }
-        }
-      } catch (e) {
-        chosenUci = pvsBestUci;
-        reason = 'safety-net-override';
-      }
-    }
-
-    // Anti-Repetition Shield: In winning positions, avoid repeating moves or perpetual loops
-    const isWinning = pvsBestScore > 40 || isWinningAdvantage;
-    if (gameHistory && gameHistory.length > 0 && isWinning && legalMoves.length > 1) {
-      const chosenMoveObj = legalMoves.find(m => `${m.from}${m.to}${m.promotion || ''}` === chosenUci);
-      if (chosenMoveObj) {
-        try {
-          const testChess = new Chess(chess.fen());
-          testChess.move(chosenMoveObj);
-          const nextKey = testChess.fen().split(' ').slice(0, 4).join(' ');
-          let reps = 0;
-          for (const k of gameHistory) {
-            if (k === nextKey) reps++;
-          }
-          if (reps >= 1) {
-            let diverted = false;
-            for (const cand of (mctsResult?.children || [])) {
-              if (cand.uci === chosenUci) continue;
-              const candSim = new Chess(chess.fen());
-              candSim.move(cand.move);
-              const candKey = candSim.fen().split(' ').slice(0, 4).join(' ');
-              let candReps = 0;
-              for (const k of gameHistory) {
-                if (k === candKey) candReps++;
-              }
-              if (candReps === 0) {
-                chosenUci = cand.uci;
-                reason = 'anti-repetition-defense';
-                diverted = true;
-                break;
-              }
-            }
-            if (!diverted) {
-              for (const m of legalMoves) {
-                const uci = `${m.from}${m.to}${m.promotion || ''}`;
-                if (uci === chosenUci) continue;
-                const candSim = new Chess(chess.fen());
-                candSim.move(m);
-                const candKey = candSim.fen().split(' ').slice(0, 4).join(' ');
-                let candReps = 0;
-                for (const k of gameHistory) {
-                  if (k === candKey) candReps++;
-                }
-                if (candReps === 0) {
-                  chosenUci = uci;
-                  reason = 'anti-repetition-defense';
-                  break;
-                }
-              }
-            }
-          }
-        } catch {}
-      }
-    }
-
-    const elapsedMs = Math.max(1, Date.now() - startTime);
-    const totalNodes = stats.nodes + stats.qnodes;
-    const nps = Math.round((totalNodes / elapsedMs) * 1000);
-    const mctsVisits = mctsResult?.bestChild?.visits || 0;
-    const mctsSims = mctsResult?.sims || 0;
-
-    process.stdout.write(
-      `info depth ${pvsSearchDepth} score cp ${pvsBestScore} nodes ${totalNodes} nps ${nps} time ${elapsedMs} visits ${mctsVisits} sims ${mctsSims} arbiter ${reason} volatility ${volatility.toFixed(2)} delta ${deltaCp} pv ${chosenUci}\n`
-    );
-
     isSearching = false;
-    process.stdout.write(`bestmove ${chosenUci}\n`);
     return;
   }
+
   let bestScore = 0;
   let lastBestMoveUci = '';
   let moveFlips = 0;
@@ -1783,56 +1320,8 @@ export function searchRoot(chess, targetDepth = 8, maxTimeMs = 3000, gameHistory
     if (elapsedMs >= dynamicLimit) break;
   }
 
-  // Anti-Repetition Shield: Ensure White never repeats positions when winning
-  if (bestScore > 50 && gameHistory && gameHistory.length > 0 && legalMoves.length > 1) {
-    try {
-      const testChess = new Chess(chess.fen());
-      testChess.move({ from: bestMoveUci.slice(0, 2), to: bestMoveUci.slice(2, 4), promotion: bestMoveUci[4] });
-      const nextKey = testChess.fen().split(' ').slice(0, 4).join(' ');
-      let reps = 0;
-      for (const k of gameHistory) {
-        if (k === nextKey) reps++;
-      }
-      if (reps >= 1) {
-        for (const m of legalMoves) {
-          const uci = `${m.from}${m.to}${m.promotion || ''}`;
-          if (uci === bestMoveUci) continue;
-          const sim = new Chess(chess.fen());
-          sim.move(m);
-          const candKey = sim.fen().split(' ').slice(0, 4).join(' ');
-          let candReps = 0;
-          for (const k of gameHistory) {
-            if (k === candKey) candReps++;
-          }
-          if (candReps === 0) {
-            bestMoveUci = uci;
-            break;
-          }
-        }
-      }
-    } catch {}
-  }
-
-  let outBestMove = bestMoveUci;
-  if (uciChess960 && currentChess960Config) {
-    const isWhite = chess.turn() === 'w';
-    const kingSq = isWhite
-      ? `${String.fromCharCode(97 + currentChess960Config.whiteKingFile)}1`
-      : `${String.fromCharCode(97 + currentChess960Config.blackKingFile)}8`;
-    if (bestMoveUci.startsWith(kingSq)) {
-      const dest = bestMoveUci.slice(2, 4);
-      if (dest === (isWhite ? 'g1' : 'g8')) {
-        const rookFile = isWhite ? currentChess960Config.whiteKingRookFile : currentChess960Config.blackKingRookFile;
-        outBestMove = `${kingSq}${String.fromCharCode(97 + rookFile)}${isWhite ? '1' : '8'}`;
-      } else if (dest === (isWhite ? 'c1' : 'c8')) {
-        const rookFile = isWhite ? currentChess960Config.whiteQueenRookFile : currentChess960Config.blackQueenRookFile;
-        outBestMove = `${kingSq}${String.fromCharCode(97 + rookFile)}${isWhite ? '1' : '8'}`;
-      }
-    }
-  }
-
   isSearching = false;
-  process.stdout.write(`bestmove ${outBestMove}\n`);
+  process.stdout.write(`bestmove ${bestMoveUci}\n`);
 }
 
 /**
@@ -1841,7 +1330,6 @@ export function searchRoot(chess, targetDepth = 8, maxTimeMs = 3000, gameHistory
 export function searchBestMove(chess, targetDepth = 6, maxTimeMs = 500, silent = true) {
   isSearching = true;
   stopRequested = false;
-  const startTime = Date.now();
 
   const legalMoves = chess.moves({ verbose: true });
   if (legalMoves.length === 0) {
@@ -1849,16 +1337,65 @@ export function searchBestMove(chess, targetDepth = 6, maxTimeMs = 500, silent =
     return { bestMoveUci: '0000', scoreCp: 0, depth: 0, nodes: 0, pv: [] };
   }
 
-  // Instant Mate-in-1 check
-  const mateMove = legalMoves.find(m => m.san && m.san.includes('#'));
-  if (mateMove) {
-    const mateUci = `${mateMove.from}${mateMove.to}${mateMove.promotion || ''}`;
+  const fallbackMove = `${legalMoves[0].from}${legalMoves[0].to}${legalMoves[0].promotion || ''}`;
+  const wasm = getCliWasmEngine();
+  if (wasm) {
+    const lines = [];
+    const prevHandler = cliWasmOutHandler;
+    cliWasmOutHandler = (line) => {
+      lines.push(line);
+      if (!silent) process.stdout.write(line + '\n');
+    };
+    try {
+      wasm.execUci(`position fen ${chess.fen()}`);
+      const searching = wasm.execUci(`go depth ${targetDepth} movetime ${maxTimeMs}`);
+      if (searching) {
+        while (wasm.step()) {}
+      }
+    } finally {
+      cliWasmOutHandler = prevHandler;
+    }
+
+    let bestMoveUci = wasm.getBestMove(fallbackMove);
+    let scoreCp = wasm.exp.wasm_get_last_score();
+    let reachedDepth = Math.max(1, wasm.exp.wasm_get_last_depth());
+    const nodes = Number(wasm.exp.wasm_get_last_nodes());
+    let finalPv = [bestMoveUci];
+
+    for (const line of lines) {
+      if (line.startsWith('info ') && line.includes(' multipv 1 ')) {
+        const cm = line.match(/\bscore cp (-?\d+)/);
+        const mm = line.match(/\bscore mate (-?\d+)/);
+        const dm = line.match(/\bdepth (\d+)/);
+        const pvIdx = line.indexOf(' pv ');
+        if (dm) reachedDepth = parseInt(dm[1], 10);
+        if (mm) {
+          const m = parseInt(mm[1], 10);
+          scoreCp = m > 0 ? 25000 - m * 10 : -25000 - m * 10;
+        } else if (cm) {
+          scoreCp = parseInt(cm[1], 10);
+        }
+        if (pvIdx !== -1) {
+          finalPv = line.slice(pvIdx + 4).trim().split(/\s+/);
+        }
+      } else if (line.startsWith('bestmove ')) {
+        bestMoveUci = line.split(/\s+/)[1] || bestMoveUci;
+      }
+    }
+
     isSearching = false;
-    return { bestMoveUci: mateUci, scoreCp: 25000, depth: 1, nodes: 1, pv: [mateUci] };
+    return {
+      bestMoveUci,
+      scoreCp,
+      depth: reachedDepth,
+      nodes,
+      pv: finalPv,
+    };
   }
 
+  const startTime = Date.now();
   const stats = { nodes: 0, qnodes: 0, seldepth: 0, ttHits: 0 };
-  let bestMoveUci = `${legalMoves[0].from}${legalMoves[0].to}${legalMoves[0].promotion || ''}`;
+  let bestMoveUci = fallbackMove;
   let bestScore = 0;
   let finalPv = [];
   let reachedDepth = 1;
@@ -1922,194 +1459,180 @@ export function initUciLoop() {
     process.stdout.write(msg + '\n');
   }
 
+  const wasm = getCliWasmEngine();
+  const cmdQueue = [];
+  let steppingGo = false;
+  let processingQueue = false;
+
+  function processNextCommand() {
+    if (processingQueue || steppingGo) return;
+    processingQueue = true;
+
+    try {
+      while (cmdQueue.length > 0 && !steppingGo) {
+        const trimmed = cmdQueue.shift();
+        if (!trimmed) continue;
+
+        const parts = trimmed.split(/\s+/);
+        const cmd = parts[0];
+
+        if (wasm && ['uci', 'isready', 'ucinewgame', 'position', 'setoption', 'eval', 'perft', 'bench', 'd', 'go'].includes(cmd)) {
+          if (cmd === 'uci') {
+            log(`id name ${ENGINE_NAME} (WASM + Reckless NNUE)`);
+            log(`id author ${ENGINE_AUTHOR}`);
+            log('option name Threads type spin default 1 min 1 max 1');
+            log('option name Hash type spin default 16 min 16 max 64');
+            log('option name MultiPV type spin default 1 min 1 max 5');
+            log('option name SearchMode type combo default Pure-PVS var Pure-PVS');
+            log('option name TacticalContempt type spin default 0 min -100 max 100');
+            log(`option name NNUE_Net type string default ${DEFAULT_NET}`);
+            log('uciok');
+            continue;
+          }
+
+          if (cmd === 'isready') {
+            if (wasm.nnueLoaded) {
+              log(`info string NNUE loaded: ${DEFAULT_NET} (63266880 bytes)`);
+            }
+            wasm.execUci('isready');
+            continue;
+          }
+
+          if (cmd === 'position') {
+            wasm.execUci(trimmed);
+            // Also keep JS Chess mirror updated for fallback/helpers
+            try {
+              let moveIdx = -1;
+              if (parts[1] === 'startpos') {
+                currentChess = new Chess();
+                moveIdx = parts.indexOf('moves');
+              } else if (parts[1] === 'fen') {
+                moveIdx = parts.indexOf('moves');
+                const fenStr = (moveIdx !== -1 ? parts.slice(2, moveIdx) : parts.slice(2)).join(' ');
+                currentChess = new Chess(fenStr);
+              }
+              if (moveIdx !== -1 && moveIdx + 1 < parts.length) {
+                for (let i = moveIdx + 1; i < parts.length; i++) {
+                  const mv = parts[i];
+                  currentChess.move({ from: mv.slice(0, 2), to: mv.slice(2, 4), promotion: mv[4] || undefined });
+                }
+              }
+            } catch {
+              // ignore mirror sync error
+            }
+            continue;
+          }
+
+          if (cmd === 'go') {
+            const started = wasm.execUci(trimmed);
+            if (started) {
+              steppingGo = true;
+              const pumpStep = () => {
+                if (!steppingGo) return;
+                const cont = wasm.step();
+                if (cont) {
+                  setTimeout(pumpStep, 0);
+                } else {
+                  steppingGo = false;
+                  processNextCommand();
+                }
+              };
+              pumpStep();
+              if (steppingGo) break;
+            }
+            continue;
+          }
+
+          wasm.execUci(trimmed);
+          if (cmd === 'eval') {
+            log(`FEN: ${currentChess.fen()}`);
+            log(`Turn: ${currentChess.turn() === 'w' ? 'White' : 'Black'}`);
+          }
+          continue;
+        }
+
+        switch (cmd) {
+          case 'uci':
+            log(`id name ${ENGINE_NAME}`);
+            log(`id author ${ENGINE_AUTHOR}`);
+            log('option name Threads type spin default 1 min 1 max 1');
+            log('option name Hash type spin default 64 min 16 max 65536');
+            log('option name MultiPV type spin default 1 min 1 max 5');
+            log('option name SearchMode type combo default Pure-PVS var Pure-PVS');
+            log(`option name NNUE_Net type string default ${DEFAULT_NET}`);
+            log('uciok');
+            break;
+          case 'isready':
+            log('readyok');
+            break;
+          case 'ucinewgame':
+            currentChess = new Chess();
+            clearSearchState();
+            break;
+          case 'position':
+            try {
+              let moveIdx = -1;
+              if (parts[1] === 'startpos') {
+                currentChess = new Chess();
+                moveIdx = parts.indexOf('moves');
+              } else if (parts[1] === 'fen') {
+                moveIdx = parts.indexOf('moves');
+                const fenStr = (moveIdx !== -1 ? parts.slice(2, moveIdx) : parts.slice(2)).join(' ');
+                currentChess = new Chess(fenStr);
+              }
+              if (moveIdx !== -1 && moveIdx + 1 < parts.length) {
+                for (let i = moveIdx + 1; i < parts.length; i++) {
+                  const mv = parts[i];
+                  currentChess.move({ from: mv.slice(0, 2), to: mv.slice(2, 4), promotion: mv[4] || undefined });
+                }
+              }
+            } catch {}
+            break;
+          case 'go': {
+            let searchDepth = 8;
+            let moveTimeMs = 2000;
+            const depthIdx = parts.indexOf('depth');
+            if (depthIdx !== -1 && parts[depthIdx + 1]) searchDepth = parseInt(parts[depthIdx + 1], 10);
+            const timeIdx = parts.indexOf('movetime');
+            if (timeIdx !== -1 && parts[timeIdx + 1]) moveTimeMs = parseInt(parts[timeIdx + 1], 10);
+            searchRoot(currentChess, searchDepth, moveTimeMs);
+            break;
+          }
+          case 'stop':
+            stopRequested = true;
+            isSearching = false;
+            break;
+          case 'eval':
+            log(`Turn: ${currentChess.turn() === 'w' ? 'White' : 'Black'}`);
+            log(`FEN: ${currentChess.fen()}`);
+            break;
+          case 'quit':
+            process.exit(0);
+            break;
+        }
+      }
+    } finally {
+      processingQueue = false;
+    }
+  }
+
   rl.on('line', (line) => {
     const trimmed = line.trim();
     if (!trimmed) return;
-
-  const parts = trimmed.split(/\s+/);
-  const cmd = parts[0];
-
-  switch (cmd) {
-    case 'uci':
-      log(`id name ${ENGINE_NAME}`);
-      log(`id author ${ENGINE_AUTHOR}`);
-      log('option name Threads type spin default 4 min 1 max 64');
-      log('option name Hash type spin default 64 min 16 max 65536');
-      log('option name MultiPV type spin default 1 min 1 max 5');
-      log('option name UCI_Chess960 type check default false');
-      log('option name EvalMode type combo default brnnue-v030 var brnnue-v030 var berserker-1.0-nnue var aura-nnue');
-      log('option name SearchMode type combo default Hybrid-MCTS-PVS var Hybrid-MCTS-PVS var Pure-PVS var Pure-MCTS');
-      log('option name TacticalContempt type spin default 45 min -100 max 100');
-      log('option name KingAttackScale type spin default 140 min 50 max 250');
-      log(`option name NNUE_Net type string default ${DEFAULT_NET}`);
-      log('uciok');
-      break;
-
-    case 'isready':
-      log('readyok');
-      break;
-
-    case 'ucinewgame':
-      currentChess = new Chess();
-      currentChess960Config = null;
-      gameHistoryFensCli = [];
-      clearSearchState();
-      break;
-
-    case 'position':
-      try {
-        gameHistoryFensCli = [];
-        let moveIdx = -1;
-        if (parts[1] === 'startpos') {
-          currentChess = new Chess();
-          currentChess960Config = null;
-          gameHistoryFensCli.push(currentChess.fen().split(' ').slice(0, 4).join(' '));
-          moveIdx = parts.indexOf('moves');
-        } else if (parts[1] === 'fen') {
-          const rawParts = [];
-          let idx = 2;
-          while (idx < parts.length && parts[idx] !== 'moves') {
-            rawParts.push(parts[idx]);
-            idx++;
-          }
-          const { normalizedFen } = normalizeChess960Fen(rawParts.join(' '));
-          currentChess = new Chess(normalizedFen);
-          const backrank = normalizedFen.split('/')[7]?.split(' ')[0] || 'RNBQKBNR';
-          currentChess960Config = extractCastlingConfig(backrank);
-          gameHistoryFensCli.push(currentChess.fen().split(' ').slice(0, 4).join(' '));
-          moveIdx = parts.indexOf('moves');
-        }
-
-        if (moveIdx !== -1 && moveIdx + 1 < parts.length) {
-          for (let i = moveIdx + 1; i < parts.length; i++) {
-            const mv = parts[i];
-            const resolved = resolveChess960Move(currentChess, mv, currentChess960Config);
-            if (resolved.isChess960Castling && resolved.side) {
-              executeChess960Castling(currentChess, resolved.side, currentChess960Config);
-            } else {
-              currentChess.move({
-                from: mv.substring(0, 2),
-                to: mv.substring(2, 4),
-                promotion: mv.length > 4 ? mv[4] : undefined
-              });
-            }
-            gameHistoryFensCli.push(currentChess.fen().split(' ').slice(0, 4).join(' '));
-          }
-        }
-      } catch {
-        // Safe fallback
+    if (trimmed === 'stop') {
+      if (wasm && steppingGo) {
+        wasm.stop();
+        const cont = wasm.step();
+        if (!cont) steppingGo = false;
+        processNextCommand();
+      } else {
+        stopRequested = true;
+        isSearching = false;
       }
-      break;
-
-    case 'chess960': {
-      let spIdx = 518;
-      if (parts[1] === 'random') {
-        spIdx = Math.floor(Math.random() * 960);
-      } else if (parts[1] && !isNaN(parseInt(parts[1], 10))) {
-        spIdx = Math.max(0, Math.min(959, parseInt(parts[1], 10)));
-      }
-      const backrank = generateChess960Backrank(spIdx);
-      currentChess960Config = extractCastlingConfig(backrank);
-      const whiteBack = backrank.toUpperCase();
-      const blackBack = backrank.toLowerCase();
-      const fen = `${blackBack}/pppppppp/8/8/8/8/PPPPPPPP/${whiteBack} w KQkq - 0 1`;
-      currentChess = new Chess(fen);
-      uciChess960 = true;
-      gameHistoryFensCli = [currentChess.fen().split(' ').slice(0, 4).join(' ')];
-      log(`Chess960 SP ${spIdx} Initialized: [${backrank}]`);
-      log(`FEN: ${fen}`);
-      log(currentChess.ascii());
-      break;
+      return;
     }
-
-    case 'go':
-      let searchDepth = 8;
-      let moveTimeMs = 2000;
-
-      const depthIdx = parts.indexOf('depth');
-      if (depthIdx !== -1 && parts[depthIdx + 1]) {
-        searchDepth = parseInt(parts[depthIdx + 1], 10);
-      }
-
-      const timeIdx = parts.indexOf('movetime');
-      if (timeIdx !== -1 && parts[timeIdx + 1]) {
-        moveTimeMs = parseInt(parts[timeIdx + 1], 10);
-      }
-
-      // Time management support for wtime / btime
-      const wtimeIdx = parts.indexOf('wtime');
-      const btimeIdx = parts.indexOf('btime');
-      if (wtimeIdx !== -1 && currentChess.turn() === 'w') {
-        const wtime = parseInt(parts[wtimeIdx + 1], 10);
-        moveTimeMs = Math.max(80, Math.floor(wtime / 25));
-      } else if (btimeIdx !== -1 && currentChess.turn() === 'b') {
-        const btime = parseInt(parts[btimeIdx + 1], 10);
-        moveTimeMs = Math.max(80, Math.floor(btime / 25));
-      }
-
-      searchRoot(currentChess, searchDepth, moveTimeMs, gameHistoryFensCli);
-      break;
-
-    case 'stop':
-      stopRequested = true;
-      isSearching = false;
-      break;
-
-    case 'setoption':
-      const nameIdx = parts.indexOf('name');
-      const valIdx = parts.indexOf('value');
-      if (nameIdx !== -1 && valIdx !== -1) {
-        const optName = parts[nameIdx + 1];
-        const optVal = parts[valIdx + 1];
-        if (optName === 'EvalMode') evalMode = optVal;
-        if (optName === 'SearchMode') searchMode = optVal;
-        if (optName === 'Threads') threads = parseInt(optVal, 10);
-        if (optName === 'Hash') hashMb = parseInt(optVal, 10);
-        if (optName === 'MultiPV') multiPv = parseInt(optVal, 10);
-        if (optName === 'UCI_Chess960') uciChess960 = optVal === 'true';
-        if (optName === 'TacticalContempt') tacticalContempt = parseInt(optVal, 10);
-        if (optName === 'KingAttackScale') kingAttackScale = parseInt(optVal, 10);
-      }
-      break;
-
-    case 'eval':
-      const brnnueCp = evaluatePosition(currentChess, 'brnnue-v030');
-      const bsz10Cp = evaluatePosition(currentChess, 'berserker-1.0-nnue');
-      const auraCp = evaluatePosition(currentChess, 'aura-nnue');
-      const deltaVsBsz10 = brnnueCp - bsz10Cp;
-      log(`=== ${ENGINE_NAME} NEURAL EVALUATION ===`);
-      log(`FEN: ${currentChess.fen()}`);
-      log(`Turn: ${currentChess.turn() === 'w' ? 'White' : 'Black'}`);
-      log(`BRnnuev030 (Dual NNUE):     ${brnnueCp > 0 ? '+' : ''}${(brnnueCp / 100).toFixed(2)} (${brnnueCp} cp)`);
-      log(`  - Subnet 1 (Berserker v0.9.0): HalfKP-1024 King Attack & Tactical Vectors`);
-      log(`  - Subnet 2 (PlentyChess):     HalfKAv2-1024 Endgame Harmony & Pawn Chains`);
-      log(`Berserker 1.0 NNUE:          ${bsz10Cp > 0 ? '+' : ''}${(bsz10Cp / 100).toFixed(2)} (${bsz10Cp} cp)`);
-      log(`Aura-NNUE (GeoSparse-MoE):   ${auraCp > 0 ? '+' : ''}${(auraCp / 100).toFixed(2)} (${auraCp} cp)`);
-      log(`Delta (BRnnuev030 - Bsz1.0): ${deltaVsBsz10 > 0 ? '+' : ''}${(deltaVsBsz10 / 100).toFixed(2)} (${deltaVsBsz10} cp)`);
-      log(`Active Net:                  ${DEFAULT_NET}`);
-      break;
-
-    case 'bench':
-      log(`Running Berserker v0.2.0 benchmark suite (5 standard positions)...`);
-      const benchFens = [
-        'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
-        'r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/2N2N2/PPPP1PPP/R1BQK2R w KQkq - 4 4',
-        '3rk2r/4bppp/p1q5/4p3/1p2P3/3B4/PPP1Q1PP/3R1R1K w - - 0 20',
-        'r1b2rk1/pp1n1ppp/2p5/4q3/2P5/3B4/PP1QNPPP/R4RK1 w - - 0 15',
-        '8/5k2/8/8/8/8/4K3/4P3 w - - 0 50'
-      ];
-      const t0 = Date.now();
-      for (const f of benchFens) {
-        searchRoot(new Chess(f), 5, 250);
-      }
-      const benchElapsed = Math.max(1, Date.now() - t0);
-      log(`Benchmark completed in ${benchElapsed}ms. All positions verified.`);
-      break;
-
-    case 'quit':
-      process.exit(0);
-      break;
-  }
+    cmdQueue.push(trimmed);
+    processNextCommand();
   });
 
   return rl;

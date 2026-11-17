@@ -30,31 +30,20 @@ import {
   Crown,
   ShieldAlert,
   Swords,
-  Sliders,
-  Shuffle
+  Sliders
 } from 'lucide-react';
 import { probeTablebase, TablebaseResult, countPieces } from './tablebaseService';
 import { saveGameRecord } from './firebaseService';
 import {
   getOpeningBookMove,
   OpeningBookEntry,
-  quiescenceSearch,
-  sortMovesMvvLva,
   evaluateKingSafety,
   KingSafetyMetrics,
-  calculateContemptBonus,
-  blendMultiPvCandidates,
   BlendedMoveResult
 } from './engine/engineHeuristics';
-import { evaluateBerserkerNnue, updateActiveBerserkerNet } from './engine/berserkerNnue';
+import { updateActiveBerserkerNet } from './engine/berserkerNnue';
 import { searchIndependentBerserker } from './engine/berserkerIndependentSearch';
-import { 
-  getChess960PositionInfo, 
-  getRandomChess960Index, 
-  resolveChess960Move, 
-  executeChess960Castling, 
-  Chess960PositionInfo 
-} from './engine/chess960';
+import { initWasmEngine } from './engine/wasmEngine';
 
 interface PlayVsEngineProps {
   maxThreads?: number;
@@ -70,12 +59,6 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
   const [playerColor, setPlayerColor] = useState<'w' | 'b'>('w');
   const [engineMode, setEngineMode] = useState<'berserker-nnue'>('berserker-nnue');
   
-  // Chess960 (Fischer Random) Mode State
-  const [isChess960, setIsChess960] = useState<boolean>(false);
-  const [chess960SpIndex, setChess960SpIndex] = useState<number>(518);
-  const [chess960Info, setChess960Info] = useState<Chess960PositionInfo | null>(null);
-  const [chess960InputSp, setChess960InputSp] = useState<string>('518');
-
   // Dynamic 24/7 Server Daemon Checkpoint Sync
   const [activeNetId, setActiveNetId] = useState<string>('berserker_dual_net_ep9_b400.nnue');
   const [activeEpoch, setActiveEpoch] = useState<number>(9);
@@ -116,9 +99,10 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
     };
   }, []);
   
-  // Native Berserker v0.3.0 Engine with BRnnuev030 Dual NNUE
+  // Native Berserker v0.6.0 WASM + Reckless NNUE Worker
   const {
     isReady: isWasmReady,
+    isNnueReady,
     isSearching: isWasmSearching,
     searchInfo: wasmSearchInfo,
     bestMove: wasmBestMove,
@@ -127,6 +111,7 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
     startSearch: startWasmSearch,
     stopSearch: stopWasmSearch,
     sendCommand: sendWasmCommand,
+    clearLogs: clearWasmLogs,
     bestMoveRef: wasmBestMoveRef,
     searchInfoRef: wasmSearchInfoRef,
     multiPvCandidatesRef: wasmMultiPvCandidatesRef
@@ -138,11 +123,20 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
 
   const [isEngineThinking, setIsEngineThinking] = useState<boolean>(false);
   const [thinkingCountdown, setThinkingCountdown] = useState<number>(15.0);
-  const [simulatedNodes, setSimulatedNodes] = useState<number>(0);
-  const [simulatedNps, setSimulatedNps] = useState<number>(0);
-  const [simulatedDepth, setSimulatedDepth] = useState<number>(0);
-  const [simulatedSeldepth, setSimulatedSeldepth] = useState<number>(0);
-  const [simulatedPv, setSimulatedPv] = useState<string>('');
+  const [liveNodes, setLiveNodes] = useState<number>(0);
+  const [liveNps, setLiveNps] = useState<number>(0);
+  const [liveDepth, setLiveDepth] = useState<number>(0);
+  const [liveSeldepth, setLiveSeldepth] = useState<number>(0);
+  const [livePv, setLivePv] = useState<string>('');
+  const [lastTelemetry, setLastTelemetry] = useState<{
+    depth: number;
+    seldepth: number;
+    nodes: number;
+    nps: number;
+    pv: string;
+    scoreCp: number;
+  }>({ depth: 0, seldepth: 0, nodes: 0, nps: 0, pv: '', scoreCp: 0 });
+
   const [showConsole, setShowConsole] = useState<boolean>(false);
   const [consoleInput, setConsoleInput] = useState<string>('');
   const terminalLogsEndRef = useRef<HTMLDivElement>(null);
@@ -155,16 +149,20 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
   const [gameResult, setGameResult] = useState<string | null>(null);
   const [hintMove, setHintMove] = useState<string | null>(null);
 
-  // Recommendations 2 & 3: Singular Extensions & Asymmetric Color Complex Tracking
+  // Full UCI move history from startpos so WASM tracks 3-fold repetitions
+  const uciMovesRef = useRef<string[]>([]);
+  const moveDispatchedForFenRef = useRef<string | null>(null);
+  const forceMoveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Singular Extension & Color Complex Tracking
   const [isSingularActive, setIsSingularActive] = useState<boolean>(false);
   const [activeColorComplexTarget, setActiveColorComplexTarget] = useState<string | null>(null);
 
-  // 5 Grandmaster Engine Upgrades States
+  // Opening Book & King Safety Informational Badges
   const [currentBookEntry, setCurrentBookEntry] = useState<OpeningBookEntry | null>(() => getOpeningBookMove(chess.fen()));
   const [activeKingSafety, setActiveKingSafety] = useState<KingSafetyMetrics | null>(null);
   const [lastBlendedMove, setLastBlendedMove] = useState<BlendedMoveResult | null>(null);
   const [contemptFactor, setContemptFactor] = useState<number>(45);
-  const [isQuiescenceActive, setIsQuiescenceActive] = useState<boolean>(true);
 
   // Syzygy 7-Piece Endgame Tablebase state
   const [tablebaseInfo, setTablebaseInfo] = useState<TablebaseResult | null>(null);
@@ -225,453 +223,82 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
   // Turn management: Check if it's engine's turn
   const isEngineTurn = chess.turn() !== playerColor && !chess.isGameOver();
 
-  // Full Unified Master Engine Evaluation (Berserker v0.3.0 BRnnuev030 Dual NNUE + Classical)
-  const evaluatePosition = (c: Chess, depthTarget: number = 40, mode: 'berserker-nnue' | 'torch4-ultra' | 'berserker-lc0' | 'berserker-1.0-baseline' | 'torch4-aggressor' = 'berserker-nnue') => {
-    if (c.isCheckmate()) {
-      return { 
-        score: c.turn() === 'w' ? -2000 : 2000, 
-        bestMove: null, 
-        pv: 'Checkmate' 
-      };
-    }
-    if (c.isDraw()) {
-      return { score: 0, bestMove: null, pv: 'Draw' };
-    }
-
-    const moves = c.moves({ verbose: true });
-    if (moves.length === 0) return { score: 0, bestMove: null, pv: '' };
-
-    // Material valuation
-    const weights: Record<string, number> = { p: 100, n: 320, b: 335, r: 500, q: 900, k: 0 };
-    let materialBalance = 0;
-    const board = c.board();
-    for (const row of board) {
-      for (const sq of row) {
-        if (sq) {
-          const val = weights[sq.type] || 0;
-          materialBalance += sq.color === 'w' ? val : -val;
-        }
-      }
-    }
-
-    // Recommendation 3: Asymmetric Bishop Color Complex Detection
-    const oppColor = c.turn() === 'w' ? 'b' : 'w';
-    let oppHasLightBishop = false;
-    let oppHasDarkBishop = false;
-    let ourHasLightBishop = false;
-    let ourHasDarkBishop = false;
-
-    c.board().forEach((row, rIdx) => {
-      row.forEach((sq, cIdx) => {
-        if (!sq || sq.type !== 'b') return;
-        const isLight = (rIdx + cIdx) % 2 === 0;
-        if (sq.color === oppColor) {
-          if (isLight) oppHasLightBishop = true;
-          else oppHasDarkBishop = true;
-        } else if (sq.color === c.turn()) {
-          if (isLight) ourHasLightBishop = true;
-          else ourHasDarkBishop = true;
-        }
+  // Keep King Safety, Color Complex & Book Badge synced cleanly to current board
+  useEffect(() => {
+    try {
+      setActiveKingSafety(evaluateKingSafety(chess, playerColor));
+      const oppColor = playerColor === 'w' ? 'b' : 'w';
+      let oppLight = false;
+      let oppDark = false;
+      let ourLight = false;
+      let ourDark = false;
+      chess.board().forEach((row, rIdx) => {
+        row.forEach((sq, cIdx) => {
+          if (!sq || sq.type !== 'b') return;
+          const isLight = (rIdx + cIdx) % 2 === 0;
+          if (sq.color === oppColor) {
+            if (isLight) oppLight = true;
+            else oppDark = true;
+          } else {
+            if (isLight) ourLight = true;
+            else ourDark = true;
+          }
+        });
       });
-    });
-    const oppWeakColor = (!oppHasDarkBishop && ourHasDarkBishop) ? 'dark' : (!oppHasLightBishop && ourHasLightBishop) ? 'light' : null;
+      setActiveColorComplexTarget(
+        !oppDark && ourDark ? 'dark' : !oppLight && ourLight ? 'light' : null
+      );
+      const cands = wasmMultiPvCandidatesRef.current;
+      setIsSingularActive(cands.length >= 2 && Math.abs(cands[0].scoreCp - cands[1].scoreCp) >= 60);
+    } catch {
+      // ignore transient state updates
+    }
+  }, [fen, playerColor, chess, wasmMultiPvCandidatesRef]);
 
-    // Upgrade 4: Castled King Shield & Storm Index Matrix
-    const kingSafety = evaluateKingSafety(c, oppColor);
-    const ownKingSafety = evaluateKingSafety(c, c.turn());
-
-    const candidateScored: { move: any; score: number }[] = [];
-
-    for (const m of moves) {
-      let moveVal = 0;
-
-      // Upgrade 3: MVV-LVA 2-Ply Quiescence Search on tactical captures
-      if (m.captured && isQuiescenceActive) {
-        c.move(m);
-        const qScore = quiescenceSearch(c, -3000, 3000, 0, 2);
-        c.undo();
-        moveVal += Math.max(-140, Math.min(140, qScore * 0.15));
-      }
-
-      // Upgrade 4: King Shelter & Storm Index Attack Vectors
-      if (kingSafety.stormThreatIndex > 25) {
-        const targetRank = parseInt(m.to[1], 10);
-        const kingRank = parseInt(kingSafety.kingSquare[1], 10);
-        if (Math.abs(targetRank - kingRank) <= 2) {
-          moveVal += Math.round(kingSafety.netAttackBonusCp * 0.35);
-        }
-      }
-      if (ownKingSafety.shieldIntegrityPct < 55 && ['f', 'g', 'h'].includes(m.from[0])) {
-        moveVal -= 30; // Protect own broken shelter
-      }
-
-      // Upgrade 5: Dynamic Contempt & Anti-Draw Bias
-      const contemptAdj = calculateContemptBonus(c, m, contemptFactor);
-      moveVal += contemptAdj;
-
-      // 0. ABSOLUTE TACTICAL SAFETY INVARIANT:
-      c.move(m);
-      if (c.isCheckmate()) {
-        c.undo();
-        return {
-          score: c.turn() === 'w' ? 2000 : -2000,
-          bestMove: m,
-          pv: `${m.san}#`,
-          isSingular: false,
-          oppWeakColor,
-          kingSafety
-        };
-      }
-
-      // Mate-in-1 Blunder Guard: Reject any move that allows an immediate opponent checkmate
-      const oppResponses = c.moves({ verbose: true });
-      const allowsOpponentMate = oppResponses.some(resp => {
-        c.move(resp);
-        const mate = c.isCheckmate();
-        c.undo();
-        return mate;
+  const rebuildMoveHistory = (c: Chess) => {
+    const hist = c.history();
+    const pairs: { moveNumber: number; w?: string; b?: string }[] = [];
+    for (let i = 0; i < hist.length; i += 2) {
+      pairs.push({
+        moveNumber: Math.floor(i / 2) + 1,
+        w: hist[i],
+        b: hist[i + 1],
       });
-      if (allowsOpponentMate) {
-        c.undo();
-        continue; // REJECT move: 100% tactical safety invariant against self-mate
-      }
-
-      // =========================================================================
-      // NUANCE GUARD: TACTICAL SACRIFICE VS HANGING PIECE DISAMBIGUATION
-      // (Layer 1 & Layer 4 Quiescence MUST OVERRIDE Layer 2 Hanging Piece Filter)
-      // e.g. Qxh2+!! or Greek Gift Bxh7+!! leading to forced checkmate
-      // =========================================================================
-      let isForcedMateIn2Sacrifice = false;
-      let hasTacticalCompensation = false;
-
-      // Check if move gives check or is a forced mating net sacrifice
-      if (oppResponses.length > 0) {
-        // Test if EVERY opponent reply leads to a forced mate on the next move
-        let allRepliesLeadToMate = true;
-        for (const oppR of oppResponses) {
-          c.move(oppR);
-          const ourReplies = c.moves({ verbose: true });
-          const hasMateReply = ourReplies.some(engM => {
-            c.move(engM);
-            const isMate = c.isCheckmate();
-            c.undo();
-            return isMate;
-          });
-          c.undo();
-          if (!hasMateReply) {
-            allRepliesLeadToMate = false;
-            break;
-          }
-        }
-        if (allRepliesLeadToMate) {
-          isForcedMateIn2Sacrifice = true;
-        }
-
-        // Quiescence check (Layer 4): If opponent recaptures the sacrificed piece,
-        // does the engine deliver checkmate or recapture equal/greater material?
-        const pieceCaptures = oppResponses.filter(r => r.to === m.to);
-        if (pieceCaptures.length > 0) {
-          for (const capR of pieceCaptures) {
-            c.move(capR);
-            const followupMoves = c.moves({ verbose: true });
-            const hasTacticalRefutation = followupMoves.some(fm => {
-              c.move(fm);
-              const isMate = c.isCheckmate();
-              c.undo();
-              if (isMate) return true;
-              // Recaptures queen or heavy material back
-              if (fm.captured && (weights[fm.captured] || 100) >= (weights[m.piece] || 100)) return true;
-              return false;
-            });
-            c.undo();
-            if (hasTacticalRefutation) {
-              hasTacticalCompensation = true;
-              break;
-            }
-          }
-        }
-      }
-
-      // If it's a genuine sacrifice for checkmate or tactical refutation, OVERRIDE Layer 2!
-      if (isForcedMateIn2Sacrifice) {
-        moveVal += 95000; // Forced mate sacrifice (e.g. Qxh2+!! followed by #)
-      } else if (hasTacticalCompensation || (m.san.includes('+') && ['q', 'r', 'b'].includes(m.piece) && oppResponses.length <= 2)) {
-        moveVal += 450; // Dynamic tactical sacrifice with mating net / winning recapture
-      } else {
-        // True hanging piece / uncompensated blunder penalty (Layer 2)
-        const canBeCapturedByLesser = oppResponses.some(
-          resp => resp.to === m.to && (weights[resp.piece] || 100) < (weights[m.piece] || 100)
-        );
-        if (canBeCapturedByLesser) {
-          moveVal -= (weights[m.piece] || 100) * 0.9;
-        }
-
-        // Severe Hanging Queen / Major Piece discovery blunder guard (only if uncompensated)
-        const dropsQueen = oppResponses.some(resp => resp.captured === 'q' && m.piece !== 'q');
-        if (dropsQueen) {
-          moveVal -= 800; // Hard rejection for accidentally dropping an uncompensated queen
-        }
-      }
-      c.undo();
-
-      // Base tactical valuation
-      if (m.captured) moveVal += (weights[m.captured] || 100) * 1.5;
-      if (m.san.includes('+')) moveVal += 45;
-      if (['d4', 'd5', 'e4', 'e5', 'c4', 'c5'].includes(m.to)) moveVal += 25;
-
-      // Authentic Berserker 18 HalfKP-Dual-1536 NNUE Evaluation
-      if (mode === 'berserker-nnue') {
-        c.move(m);
-        try {
-          const berserkerEval = evaluateBerserkerNnue(c.fen());
-          const perspectiveSign = c.turn() === 'w' ? -1 : 1; // Evaluated position is from opponent's turn, so invert
-          moveVal += Math.round(berserkerEval.evalCp * perspectiveSign * 0.45);
-          moveVal += Math.round(berserkerEval.tacticalAttackScalingBonus * 0.35);
-        } catch {
-          // Fallback if FEN parsing is transiently invalid
-        }
-        c.undo();
-      }
-
-      // 1. ALL TORCH 4 AGGRESSIVE UPGRADES AUTOMATICALLY ACTIVE:
-      // Dynamic Contempt: actively avoids sterile early queen trades unless ahead
-      if (m.piece === 'q' && m.captured === 'q') {
-        const isAhead = c.turn() === 'w' ? materialBalance > 150 : materialBalance < -150;
-        if (!isAhead) moveVal -= 60;
-      }
-
-      // Flank pawn storming (h4/h5, g4/g5, f4/f5)
-      const isFlankPawn = ['h4', 'h5', 'g4', 'g5', 'f4', 'f5', 'a4', 'a5', 'b4', 'b5', 'h3', 'g3'].includes(m.to);
-      if (m.piece === 'p' && isFlankPawn) {
-        moveVal += mode === 'torch4-aggressor' ? 65 : 42;
-      }
-
-      // Dominant central knight outposts in enemy territory
-      if (m.piece === 'n' && ['c5', 'd5', 'e5', 'f5', 'c4', 'd4', 'e4', 'f4', 'g5', 'e6', 'd6'].includes(m.to)) {
-        moveVal += 52;
-      }
-
-      // Active bishop harmony along open diagonals
-      if (m.piece === 'b') moveVal += 35;
-
-      // King zone attack pressure & continuous checking momentum
-      if (m.san.includes('+')) moveVal += 44;
-
-      // 2. ALL ULTRA-SQUEEZE BREAKTHROUGHS AUTOMATICALLY ACTIVE:
-      // Double/Triple Singular Extensions: prioritize decisive captures & tactical refutations
-      if (m.captured && ['q', 'r', 'b', 'n'].includes(m.captured)) moveVal += 28;
-
-      // CorrHist Queenless Endgame Conversion: boost passed pawn march when queens are gone
-      const isQueenless = !c.fen().split(' ')[0].includes('q') && !c.fen().split(' ')[0].includes('Q');
-      if (isQueenless && m.piece === 'p') moveVal += 35;
-
-      // 3. 4-Ply Continuation History Bonus
-      if (m.piece === 'n' || m.piece === 'b' || m.piece === 'r') moveVal += 20;
-
-      // 4. ADVANCED GRANDMASTER PRODUCTION HEURISTICS:
-      // Rook on Open / Semi-Open File
-      if (m.piece === 'r') {
-        const fileChar = m.to[0];
-        const flatBoard = c.board().flat();
-        const friendlyPawnOnFile = flatBoard.some(sq => sq && sq.type === 'p' && sq.color === c.turn());
-        const enemyPawnOnFile = flatBoard.some(sq => sq && sq.type === 'p' && sq.color !== c.turn());
-        if (!friendlyPawnOnFile && !enemyPawnOnFile) {
-          moveVal += 38; // Full open file penetration
-        } else if (!friendlyPawnOnFile) {
-          moveVal += 22; // Semi-open file pressure
-        }
-      }
-
-      // Passed Pawn Advancement Lust (Rank 5 -> +38, Rank 6 -> +75, Rank 7 -> +135)
-      if (m.piece === 'p') {
-        const rank = parseInt(m.to[1], 10);
-        if (c.turn() === 'w') {
-          if (rank === 7) moveVal += 135;
-          else if (rank === 6) moveVal += 75;
-          else if (rank === 5) moveVal += 38;
-        } else {
-          if (rank === 2) moveVal += 135;
-          else if (rank === 3) moveVal += 75;
-          else if (rank === 4) moveVal += 38;
-        }
-      }
-
-      // Bishop Pair Harmony Bonus
-      if (m.piece === 'b') {
-        const bishopCount = c.board().flat().filter(sq => sq && sq.type === 'b' && sq.color === c.turn()).length;
-        if (bishopCount >= 2) moveVal += 30;
-      }
-
-      // Tactical Knight / Pawn Fork Multi-Target Threat Detection
-      if (m.piece === 'n') {
-        const col = m.to.charCodeAt(0) - 97;
-        const row = parseInt(m.to[1], 10);
-        const knightJumps = [
-          [-2, -1], [-2, 1], [-1, -2], [-1, 2],
-          [1, -2], [1, 2], [2, -1], [2, 1]
-        ];
-        let attackedHeavyPieces = 0;
-        for (const [dc, dr] of knightJumps) {
-          const targetCol = col + dc;
-          const targetRow = row + dr;
-          if (targetCol >= 0 && targetCol <= 7 && targetRow >= 1 && targetRow <= 8) {
-            const sqName = `${String.fromCharCode(97 + targetCol)}${targetRow}`;
-            const targetPiece = c.get(sqName as any);
-            if (targetPiece && targetPiece.color !== c.turn() && ['q', 'r', 'k'].includes(targetPiece.type)) {
-              attackedHeavyPieces++;
-            }
-          }
-        }
-        if (attackedHeavyPieces >= 2) {
-          moveVal += 68; // Devastating multi-fork on heavy pieces
-        }
-      }
-
-      // 5. Lc0-STYLE DEEP POSITIONAL UNDERSTANDING & PROPHYLAXIS:
-      // A. Space Control & Mobility Strangling (Constriction / Squeeze)
-      c.move(m);
-      const oppLegalMoves = c.moves({ verbose: true });
-      const oppMobility = oppLegalMoves.length;
-      c.undo();
-      if (oppMobility <= 24) {
-        const constriction = 24 - oppMobility;
-        moveVal += (mode === 'berserker-lc0' ? 4 : 2) * constriction; // Up to +88cp for paralyzing opponent
-      }
-
-      // B. Pawn Skeleton Health (Doubled & Isolated Pawns vs Solid Chains)
-      if (m.piece === 'p') {
-        const fileChar = m.to[0];
-        const flatBoard = c.board().flat();
-        // Check if move creates doubled pawns
-        const sameFilePawns = flatBoard.filter(sq => sq && sq.type === 'p' && sq.color === c.turn() && sq.square?.[0] === fileChar).length;
-        if (sameFilePawns >= 2) {
-          moveVal -= mode === 'berserker-lc0' ? 36 : 22; // Heavy penalty for structural self-damage
-        }
-        // Central Pawn Lever Dominance (c4, d4, e4, c5, d5, e5)
-        if (['d4', 'e4', 'd5', 'e5'].includes(m.to)) {
-          moveVal += mode === 'berserker-lc0' ? 35 : 20;
-        }
-      }
-
-      // C. Positional Exchange Evaluation: No artificial sacrifice bonus
-      if (m.piece === 'r' && m.captured && ['n', 'b'].includes(m.captured)) {
-        // Punish giving up a rook for a minor piece unless tactical win
-        moveVal -= 120;
-      }
-
-      // D. Good vs Bad Bishop (Color Complex Dominance)
-      if (m.piece === 'b') {
-        const isLightSquareBishop = (m.to.charCodeAt(0) - 97 + parseInt(m.to[1], 10)) % 2 !== 0;
-        const centralPawns = c.board().flat().filter(sq => sq && sq.type === 'p' && sq.color === c.turn() && ['d4', 'e4', 'd5', 'e5', 'c4', 'c5'].includes(sq.square || ''));
-        const pawnsOnSameColor = centralPawns.filter(p => {
-          const sq = p?.square || 'a1';
-          return (sq.charCodeAt(0) - 97 + parseInt(sq[1], 10)) % 2 !== (isLightSquareBishop ? 0 : 1);
-        }).length;
-        if (pawnsOnSameColor >= 2) {
-          moveVal -= 32; // Bad bishop biting on own central pawns
-        } else {
-          moveVal += 28; // Dynamic bishop ruling open opposite color complex
-        }
-      }
-
-      // E. Prophylactic Clamping (Suppression of Opponent Infiltration)
-      if (['h3', 'a3', 'h6', 'a6'].includes(m.san) || ['Kh1', 'Kh8', 'Kg1', 'Kg8'].includes(m.san)) {
-        if (mode === 'berserker-lc0') {
-          moveVal += 32; // Lc0 values prophylaxis & safety before overextending
-        }
-      }
-
-      // F. Recommendation 3: Asymmetric Bishop Color Complex Targeting
-      if (oppWeakColor) {
-        const isTargetLight = (m.to.charCodeAt(0) - 97 + parseInt(m.to[1], 10)) % 2 !== 0;
-        const targetMatchesWeakness = oppWeakColor === 'dark' ? !isTargetLight : isTargetLight;
-        const targetRank = parseInt(m.to[1], 10);
-        const isInOppHalf = c.turn() === 'w' ? targetRank >= 4 : targetRank <= 5;
-        if (targetMatchesWeakness && isInOppHalf) {
-          moveVal += 48; // Infiltration bonus onto opponent's unprotected color complex
-          if (m.piece === 'n') moveVal += 26; // Dominant outpost knight
-          if (m.piece === 'p') moveVal += 32; // Fix opponent pawns on the opposite color
-          if (m.piece === 'b') moveVal += 35; // Crown the surviving bishop as ruler of the weak squares
-        }
-      }
-
-      // Dynamic Game-Phase Tapered Bounding & Sublinear Saturation Curve:
-      // In middlegame with heavy pieces, keep tight [-180, +120] to ensure 100% tactical safety.
-      // In endgame, taper upper bound to +260cp and apply smooth sublinear tanh damping so the engine can break fortresses.
-      const nonPawnPieces = c.board().flat().filter(sq => sq && ['q', 'r', 'b', 'n'].includes(sq.type)).length;
-      const isLateEndgame = nonPawnPieces <= 4;
-      const maxPosBound = isLateEndgame ? 260 : 120;
-      const minPosBound = isLateEndgame ? -260 : -180;
-
-      // Endgame Zugzwang & Paralyzation Breaker: when opponent has <= 6 legal moves in endgame
-      let zugzwangBonus = 0;
-      if (isLateEndgame && oppResponses.length <= 6) {
-        zugzwangBonus = (6 - oppResponses.length) * 22; // Breaks fortress stagnations
-      }
-
-      const tacticalBase = (m.captured ? (weights[m.captured] || 100) : 0) + (m.san.includes('+') ? 45 : 0);
-      const rawPositional = (moveVal - tacticalBase) + zugzwangBonus;
-
-      // Sublinear smooth saturation: preserves gradient without hard-clipping plateaus
-      const saturatedPos = rawPositional >= 0 
-        ? maxPosBound * Math.tanh(rawPositional / maxPosBound)
-        : minPosBound * Math.tanh(Math.abs(rawPositional) / Math.abs(minPosBound));
-
-      const safeMoveVal = tacticalBase + saturatedPos;
-
-      candidateScored.push({ move: m, score: safeMoveVal });
     }
-
-    candidateScored.sort((a, b) => b.score - a.score);
-    const topCandidate = candidateScored[0] || { move: moves[0], score: 0 };
-    const runnerUpCandidate = candidateScored[1];
-    let isSingularExt = false;
-
-    // Recommendation 2: Enhanced Singular Extensions (SE)
-    // When top candidate is ahead of all alternatives by >= 60cp margin, extend search verification
-    if (runnerUpCandidate && (topCandidate.score - runnerUpCandidate.score >= 60)) {
-      isSingularExt = true;
-      // Probe opponent replies deeper (1-2 plies deeper) to ensure no hidden tactical refutation exists
-      c.move(topCandidate.move);
-      const oppReplies = c.moves({ verbose: true });
-      let trapDetected = false;
-      for (const rep of oppReplies.slice(0, 4)) {
-        c.move(rep);
-        const counterMoves = c.moves({ verbose: true });
-        for (const cm of counterMoves) {
-          if (cm.captured === 'q' && rep.piece !== 'q') {
-            trapDetected = true;
-            break;
-          }
-        }
-        c.undo();
-        if (trapDetected) break;
-      }
-      c.undo();
-
-      if (!trapDetected) {
-        topCandidate.score += 45; // Enhanced Singular Extension Confirmation Bonus
-      }
-    }
-
-    const best = topCandidate.move;
-    const pvLine = `${best.san} ${moves.length > 1 ? moves[1].san : ''}`;
-    return {
-      score: materialBalance,
-      bestMove: best,
-      pv: pvLine,
-      isSingular: isSingularExt,
-      oppWeakColor,
-      kingSafety
-    };
+    return pairs;
   };
 
-  // Immediate move dispatch logic with 5 Grandmaster Engine Upgrades
-  const dispatchEngineMove = () => {
-    let chosenMove: any = null;
+  // Dispatch engine move directly from WASM NNUE search so played move === pv[0]
+  const dispatchEngineMove = (overrideBestMoveUci?: string) => {
+    const activeFen = chess.fen();
+    if (
+      moveDispatchedForFenRef.current === activeFen ||
+      chess.turn() === playerColor ||
+      chess.isGameOver()
+    ) {
+      return;
+    }
 
-    // 0. PRIORITY 0: SYZYGY 7-PIECE ENDGAME TABLEBASE (100% Mathematical Perfection)
-    if (tablebaseInfo && tablebaseInfo.bestMoveUci) {
+    if (forceMoveTimerRef.current) {
+      clearTimeout(forceMoveTimerRef.current);
+      forceMoveTimerRef.current = null;
+    }
+
+    // Informational opening book badge only (never overrides engine PV)
+    setCurrentBookEntry(getOpeningBookMove(activeFen));
+
+    let chosenMove: any = null;
+    let finalTelemetry = {
+      depth: wasmSearchInfoRef.current?.depth || liveDepth || 0,
+      seldepth: wasmSearchInfoRef.current?.seldepth || liveSeldepth || 0,
+      nodes: wasmSearchInfoRef.current?.nodes || liveNodes || 0,
+      nps: wasmSearchInfoRef.current?.nps || liveNps || 0,
+      pv: wasmSearchInfoRef.current?.pv || livePv || '',
+      scoreCp: wasmSearchInfoRef.current?.scoreCp ?? evalCp,
+    };
+
+    // 0. PRIORITY 0: SYZYGY 7-PIECE ENDGAME TABLEBASE (<= 7 pieces)
+    if (countPieces(activeFen) <= 7 && tablebaseInfo && tablebaseInfo.bestMoveUci) {
       try {
         const uci = tablebaseInfo.bestMoveUci;
         const tbMove = chess.move({
@@ -681,6 +308,7 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
         });
         if (tbMove) {
           chosenMove = tbMove;
+          finalTelemetry = { ...finalTelemetry, pv: uci };
           setLastBlendedMove({
             chosenMoveUci: uci,
             chosenMoveSan: tbMove.san,
@@ -692,52 +320,40 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
       }
     }
 
-    // 1. PRIORITY 1: GRANDMASTER OPENING BOOK (Instant 0ms GM Theoretical Depth)
+    // 1. PRIORITY 1: BERSERKER C++20 WASM + RECKLESS NNUE ENGINE MOVE (matches pv[0])
     if (!chosenMove) {
-      const bookEntry = getOpeningBookMove(chess.fen());
-      if (bookEntry) {
-        try {
-          const bMove = chess.move({
-            from: bookEntry.uci.slice(0, 2),
-            to: bookEntry.uci.slice(2, 4),
-            promotion: bookEntry.uci[4] || 'q'
-          });
-          if (bMove) {
-            chosenMove = bMove;
-            setCurrentBookEntry(bookEntry);
-            setLastBlendedMove({
-              chosenMoveUci: bookEntry.uci,
-              chosenMoveSan: bMove.san,
-              reason: 'book',
-              openingInfo: bookEntry
-            });
-          }
-        } catch (e) {
-          console.warn('Book move parse error:', e);
-        }
-      } else {
-        setCurrentBookEntry(null);
-      }
-    }
+      const pvFirst = (wasmSearchInfoRef.current?.pv || '').trim().split(/\s+/)[0] || '';
+      const wasmMove =
+        overrideBestMoveUci ||
+        wasmBestMoveRef.current ||
+        wasmBestMove ||
+        (pvFirst.length >= 4 ? pvFirst : '');
 
-    // 2. PRIORITY 2: BERSERKER 18 CCRL NEURAL ENGINE (Full 3640+ Elo WASM NNUE Acceleration)
-    if (!chosenMove) {
-      const wasmMove = wasmBestMoveRef.current || wasmBestMove;
       if (wasmMove && wasmMove.length >= 4) {
         try {
           const testMove = chess.move({
             from: wasmMove.slice(0, 2),
             to: wasmMove.slice(2, 4),
-            promotion: wasmMove[4] || 'q'
+            promotion: wasmMove[4] || undefined
           });
           if (testMove) {
             chosenMove = testMove;
             const currentInfo = wasmSearchInfoRef.current;
-            if (currentInfo) {
-              setEvalCp(currentInfo.scoreCp);
-              setSimulatedNodes(currentInfo.nodes);
-              setSimulatedDepth(currentInfo.depth);
-              setSimulatedPv(currentInfo.pv || testMove.san);
+            if (currentInfo && currentInfo.depth > 0) {
+              const adjustedPv =
+                currentInfo.pv && currentInfo.pv.trim().startsWith(wasmMove)
+                  ? currentInfo.pv
+                  : wasmMove;
+              finalTelemetry = {
+                depth: currentInfo.depth,
+                seldepth: currentInfo.seldepth || currentInfo.depth,
+                nodes: currentInfo.nodes,
+                nps: currentInfo.nps,
+                pv: adjustedPv,
+                scoreCp: currentInfo.scoreCp,
+              };
+            } else if (!finalTelemetry.pv) {
+              finalTelemetry.pv = wasmMove;
             }
             setLastBlendedMove({
               chosenMoveUci: wasmMove,
@@ -750,21 +366,29 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
         }
       }
 
-      // Battle-hardened Pure PVS Berserker Alpha-Beta Search (Full Thinking Window)
+      // Emergency synchronous Pure-PVS fallback only if worker had not finished booting yet
       if (!chosenMove) {
-        const searchDepth = Math.min(18, Math.max(8, Math.round(thinkingTimeSec * 1.5)));
-        const searchTime = Math.round(thinkingTimeSec * 1000);
-        const bRes = searchIndependentBerserker(chess.fen(), searchDepth, searchTime);
+        const searchDepth = Math.min(12, Math.max(6, Math.round(thinkingTimeSec * 1.2)));
+        const searchTime = Math.min(2500, Math.round(thinkingTimeSec * 1000));
+        const bRes = searchIndependentBerserker(activeFen, searchDepth, searchTime);
 
-        if (bRes && bRes.bestMoveSan) {
+        if (bRes && bRes.bestMoveUci && bRes.bestMoveUci !== '0000') {
           try {
-            const bMove = chess.move(bRes.bestMoveSan);
+            const bMove = chess.move({
+              from: bRes.bestMoveUci.slice(0, 2),
+              to: bRes.bestMoveUci.slice(2, 4),
+              promotion: bRes.bestMoveUci[4] || undefined
+            });
             if (bMove) {
               chosenMove = bMove;
-              setEvalCp(bRes.scoreCp);
-              setSimulatedNodes(bRes.nodes + bRes.qnodes);
-              setSimulatedDepth(bRes.depth);
-              setSimulatedPv(bRes.pv.length > 0 ? bRes.pv.join(' ') : bRes.bestMoveSan);
+              finalTelemetry = {
+                depth: bRes.depth,
+                seldepth: bRes.seldepth,
+                nodes: bRes.nodes + bRes.qnodes,
+                nps: bRes.nps,
+                pv: bRes.pv.length > 0 ? bRes.pv.join(' ') : bMove.san,
+                scoreCp: bRes.scoreCp,
+              };
               setLastBlendedMove({
                 chosenMoveUci: bRes.bestMoveUci,
                 chosenMoveSan: bMove.san,
@@ -772,26 +396,13 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
               });
             }
           } catch (err) {
-            console.warn('Berserker search move play error:', err);
-          }
-        }
-      }
-
-      // Chess960 Castling resolution for engine moves
-      if (!chosenMove && isChess960 && chess960Info) {
-        const testUci = wasmMove || '';
-        if (testUci) {
-          const resolved = resolveChess960Move(chess, testUci, chess960Info.castlingConfig);
-          if (resolved.isChess960Castling && resolved.side) {
-            executeChess960Castling(chess, resolved.side, chess960Info.castlingConfig);
-            const castlingSan = resolved.side === 'kingside' ? 'O-O' : 'O-O-O';
-            chosenMove = { san: castlingSan, from: testUci.slice(0, 2), to: testUci.slice(2, 4) } as any;
+            console.warn('Berserker emergency search move error:', err);
           }
         }
       }
     }
 
-    // Ultimate fallback to guarantee game continues
+    // Ultimate legality safety fallback
     if (!chosenMove) {
       const legal = chess.moves({ verbose: true });
       if (legal.length > 0) {
@@ -800,24 +411,24 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
     }
 
     if (chosenMove) {
-      setFen(chess.fen());
+      moveDispatchedForFenRef.current = activeFen;
+      const uciPlayed = `${chosenMove.from}${chosenMove.to}${chosenMove.promotion || ''}`;
+      uciMovesRef.current = [...uciMovesRef.current, uciPlayed];
+
+      const nextFen = chess.fen();
+      setFen(nextFen);
+      setCurrentBookEntry(getOpeningBookMove(nextFen));
       setLastMoveSquares({ from: chosenMove.from, to: chosenMove.to });
+      setMoveHistory(rebuildMoveHistory(chess));
 
-      // Record to history
-      const turnIsBlackNow = chess.turn() === 'b';
-      setMoveHistory((prev) => {
-        if (turnIsBlackNow) {
-          return [...prev, { moveNumber: prev.length + 1, w: chosenMove.san }];
-        } else {
-          const updated = [...prev];
-          if (updated.length > 0) {
-            updated[updated.length - 1].b = chosenMove.san;
-          }
-          return updated;
-        }
-      });
+      setEvalCp(finalTelemetry.scoreCp);
+      setLiveDepth(finalTelemetry.depth);
+      setLiveSeldepth(finalTelemetry.seldepth);
+      setLiveNodes(finalTelemetry.nodes);
+      setLiveNps(finalTelemetry.nps);
+      setLivePv(finalTelemetry.pv);
+      setLastTelemetry(finalTelemetry);
 
-      // Check game over
       if (chess.isGameOver()) {
         if (chess.isCheckmate()) {
           const winner = chess.turn() === 'w' ? 'Black' : 'White';
@@ -835,65 +446,77 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
     setThinkingCountdown(thinkingTimeSec);
   };
 
-  // Manual Force Move trigger
+  // Manual Force Move trigger: asks WASM to stop and immediately emit bestmove === pv[0]
   const handleForceMoveNow = () => {
     if (!isEngineThinking || gameResult) return;
-    dispatchEngineMove();
+    stopWasmSearch();
+    if (forceMoveTimerRef.current) clearTimeout(forceMoveTimerRef.current);
+    forceMoveTimerRef.current = setTimeout(() => {
+      dispatchEngineMove();
+    }, 350);
   };
 
-  // Engine Think Loop with Native Berserker v0.3.0 Engine (Customizable Thinking Allocation)
+  // Trigger Native C++20 WASM + Reckless NNUE Search when it becomes Engine's Turn
   useEffect(() => {
     if (!isEngineTurn || gameResult) return;
+    if (moveDispatchedForFenRef.current === fen) return;
 
     setIsEngineThinking(true);
     setThinkingCountdown(thinkingTimeSec);
-    setSimulatedNodes(0);
-    setSimulatedDepth(1);
-    setSimulatedPv('Berserker v0.3.0 BRnnuev030 dual neural search running...');
+    setLiveNodes(0);
+    setLiveNps(0);
+    setLiveDepth(0);
+    setLiveSeldepth(0);
+    setLivePv('');
 
-    // Trigger Native Berserker Engine Search
-    const searchMoveTime = Math.max(800, Math.round(thinkingTimeSec * 1000 - 200));
-    startWasmSearch(chess.fen(), searchMoveTime);
+    const searchMoveTime = Math.max(400, Math.round(thinkingTimeSec * 1000 - 150));
+    startWasmSearch(chess.fen(), searchMoveTime, uciMovesRef.current);
 
     const startTime = Date.now();
-    let moveDispatched = false;
+    const safetyDeadlineSec = Math.max(thinkingTimeSec + 6, 10);
 
     const interval = setInterval(() => {
       const elapsed = (Date.now() - startTime) / 1000;
       const remaining = Math.max(0, thinkingTimeSec - elapsed);
       setThinkingCountdown(parseFloat(remaining.toFixed(1)));
 
-      // Pull live telemetry from native Berserker engine via ref without resetting effect
       const currentInfo = wasmSearchInfoRef.current;
       if (currentInfo && currentInfo.depth > 0) {
-        setSimulatedDepth(currentInfo.depth);
-        setSimulatedSeldepth(currentInfo.seldepth || currentInfo.depth + 6);
-        setSimulatedNodes(currentInfo.nodes);
-        const currentNps = currentInfo.nps || Math.round((currentInfo.nodes / Math.max(0.05, elapsed)));
-        setSimulatedNps(currentNps);
-        if (currentInfo.pv) setSimulatedPv(currentInfo.pv);
-        if (currentInfo.scoreCp !== 0) setEvalCp(currentInfo.scoreCp);
-      } else {
-        const fraction = Math.min(1, elapsed / thinkingTimeSec);
-        const dynamicNodes = Math.round(fraction * thinkingTimeSec * 450000);
-        setSimulatedNodes(dynamicNodes);
-        setSimulatedNps(450000 + Math.round(Math.sin(elapsed) * 40000));
-        setSimulatedDepth(Math.round(8 + fraction * 14));
-        setSimulatedSeldepth(Math.round(14 + fraction * 18));
+        setLiveDepth(currentInfo.depth);
+        setLiveSeldepth(currentInfo.seldepth || currentInfo.depth);
+        setLiveNodes(currentInfo.nodes);
+        const currentNps =
+          currentInfo.nps || Math.round(currentInfo.nodes / Math.max(0.05, elapsed));
+        setLiveNps(currentNps);
+        if (currentInfo.pv) setLivePv(currentInfo.pv);
+        setEvalCp(currentInfo.scoreCp);
       }
 
-      if (elapsed >= thinkingTimeSec && !moveDispatched) {
-        moveDispatched = true;
+      // Only force fallback if worker failed well past its allocated movetime
+      if (elapsed >= safetyDeadlineSec) {
         clearInterval(interval);
+        stopWasmSearch();
         dispatchEngineMove();
       }
     }, 100);
 
     return () => {
       clearInterval(interval);
+      if (forceMoveTimerRef.current) {
+        clearTimeout(forceMoveTimerRef.current);
+        forceMoveTimerRef.current = null;
+      }
       stopWasmSearch();
     };
   }, [fen, isEngineTurn, gameResult, playerColor, thinkingTimeSec]);
+
+  // Immediately play the exact bestmove emitted by WASM so board move === pv[0]
+  useEffect(() => {
+    if (!isEngineThinking || !isEngineTurn || gameResult) return;
+    if (!wasmBestMove || wasmBestMove === '0000') return;
+    if (moveDispatchedForFenRef.current === fen) return;
+    dispatchEngineMove(wasmBestMove);
+  }, [wasmBestMove, isEngineThinking, isEngineTurn, gameResult, fen]);
 
   // Parse FEN into 8x8 array
   const parseFen = (currentFen: string) => {
@@ -931,48 +554,6 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
     const square = `${colLetter}${rowNum}`;
 
     if (selectedSquare) {
-      // Chess960 Castling resolution (clicking King then King's friendly Rook or destination)
-      if (isChess960 && chess960Info) {
-        const uciCandidate = `${selectedSquare}${square}`;
-        const resolved = resolveChess960Move(chess, uciCandidate, chess960Info.castlingConfig);
-        if (resolved.isChess960Castling && resolved.side) {
-          const nextFen = executeChess960Castling(chess, resolved.side, chess960Info.castlingConfig);
-          setFen(nextFen);
-          setCurrentBookEntry(null);
-          setLastMoveSquares({ from: selectedSquare, to: square });
-          setSelectedSquare(null);
-          setLegalMoves([]);
-          setHintMove(null);
-
-          const castlingSan = resolved.side === 'kingside' ? 'O-O' : 'O-O-O';
-          const turnIsBlackNow = chess.turn() === 'b';
-          setMoveHistory((prev) => {
-            if (turnIsBlackNow) {
-              return [...prev, { moveNumber: prev.length + 1, w: castlingSan }];
-            } else {
-              const updated = [...prev];
-              if (updated.length > 0) {
-                updated[updated.length - 1].b = castlingSan;
-              }
-              return updated;
-            }
-          });
-
-          if (chess.isGameOver()) {
-            if (chess.isCheckmate()) {
-              const winner = chess.turn() === 'w' ? 'Black' : 'White';
-              const resultStr = chess.turn() === 'w' ? '0-1' : '1-0';
-              setGameResult(`Checkmate! ${winner} wins!`);
-              handleAutoSaveCompletedGame(resultStr, `Checkmate by ${winner}`);
-            } else if (chess.isDraw()) {
-              setGameResult('Game drawn (Stalemate / Insufficient Material / Repetition).');
-              handleAutoSaveCompletedGame('1/2-1/2', 'Draw by stalemate or repetition');
-            }
-          }
-          return;
-        }
-      }
-
       try {
         const move = chess.move({
           from: selectedSquare,
@@ -981,6 +562,9 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
         });
 
         if (move) {
+          const uciPlayed = `${move.from}${move.to}${move.promotion || ''}`;
+          uciMovesRef.current = [...uciMovesRef.current, uciPlayed];
+          moveDispatchedForFenRef.current = null;
           const nextFen = chess.fen();
           setFen(nextFen);
           setCurrentBookEntry(getOpeningBookMove(nextFen));
@@ -990,18 +574,7 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
           setHintMove(null);
 
           // Record move
-          const turnIsBlackNow = chess.turn() === 'b';
-          setMoveHistory((prev) => {
-            if (turnIsBlackNow) {
-              return [...prev, { moveNumber: prev.length + 1, w: move.san }];
-            } else {
-              const updated = [...prev];
-              if (updated.length > 0) {
-                updated[updated.length - 1].b = move.san;
-              }
-              return updated;
-            }
-          });
+          setMoveHistory(rebuildMoveHistory(chess));
 
           // Check game over
           if (chess.isGameOver()) {
@@ -1034,33 +607,16 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
     }
   };
 
-  const handleStartChess960 = (requestedIndex?: number) => {
-    const targetIdx = requestedIndex !== undefined ? requestedIndex : getRandomChess960Index();
-    const info = getChess960PositionInfo(targetIdx);
-    setChess960SpIndex(targetIdx);
-    setChess960InputSp(targetIdx.toString());
-    setChess960Info(info);
-    setIsChess960(true);
-    chess.load(info.fen);
-    setFen(info.fen);
-    setCurrentBookEntry(null);
-    setLastBlendedMove(null);
-    setSelectedSquare(null);
-    setLegalMoves([]);
-    setLastMoveSquares(null);
-    setMoveHistory([]);
-    setGameResult(null);
-    setHintMove(null);
-    setIsEngineThinking(false);
-    setEvalCp(0);
-    sendWasmCommand('setoption name UCI_Chess960 value true');
-    sendWasmCommand(`position fen ${info.fen}`);
-  };
-
-  const handleStandardChessReset = () => {
-    setIsChess960(false);
-    setChess960Info(null);
+  const handleNewGame = () => {
+    if (forceMoveTimerRef.current) {
+      clearTimeout(forceMoveTimerRef.current);
+      forceMoveTimerRef.current = null;
+    }
+    stopWasmSearch();
+    sendWasmCommand('ucinewgame');
     chess.reset();
+    uciMovesRef.current = [];
+    moveDispatchedForFenRef.current = null;
     const startFen = chess.fen();
     setFen(startFen);
     setCurrentBookEntry(getOpeningBookMove(startFen));
@@ -1072,23 +628,25 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
     setGameResult(null);
     setHintMove(null);
     setIsEngineThinking(false);
+    setThinkingCountdown(thinkingTimeSec);
     setEvalCp(0);
-    sendWasmCommand('setoption name UCI_Chess960 value false');
-    sendWasmCommand('position startpos');
-  };
-
-  const handleNewGame = () => {
-    if (isChess960) {
-      handleStartChess960(chess960SpIndex);
-    } else {
-      handleStandardChessReset();
-    }
+    setLiveDepth(0);
+    setLiveSeldepth(0);
+    setLiveNodes(0);
+    setLiveNps(0);
+    setLivePv('');
+    setLastTelemetry({ depth: 0, seldepth: 0, nodes: 0, nps: 0, pv: '', scoreCp: 0 });
   };
 
   const handleTakeback = () => {
     if (isEngineThinking) return;
-    chess.undo(); // Undo engine move
-    chess.undo(); // Undo human move
+    const u1 = chess.undo();
+    if (u1) uciMovesRef.current = uciMovesRef.current.slice(0, -1);
+    if (chess.turn() !== playerColor) {
+      const u2 = chess.undo();
+      if (u2) uciMovesRef.current = uciMovesRef.current.slice(0, -1);
+    }
+    moveDispatchedForFenRef.current = null;
     const undoFen = chess.fen();
     setFen(undoFen);
     setCurrentBookEntry(getOpeningBookMove(undoFen));
@@ -1097,17 +655,37 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
     setGameResult(null);
     setHintMove(null);
 
-    setMoveHistory((prev) => {
-      if (prev.length === 0) return [];
-      const updated = [...prev];
-      updated.pop();
-      return updated;
-    });
+    const remainingVerbose = chess.history({ verbose: true });
+    const prevMove = remainingVerbose[remainingVerbose.length - 1];
+    setLastMoveSquares(prevMove ? { from: prevMove.from, to: prevMove.to } : null);
+    setMoveHistory(rebuildMoveHistory(chess));
   };
 
-  const handleRequestHint = () => {
+  const handleRequestHint = async () => {
     if (isEngineThinking || gameResult) return;
-    const bRes = searchIndependentBerserker(chess.fen(), 7, 700);
+    const hintFen = chess.fen();
+    try {
+      const wasm = await initWasmEngine();
+      if (wasm) {
+        const wRes = wasm.search('startpos', 10, 700, uciMovesRef.current);
+        if (wRes.bestMoveUci && wRes.bestMoveUci !== '0000') {
+          const tmp = new Chess(hintFen);
+          const mv = tmp.move({
+            from: wRes.bestMoveUci.slice(0, 2),
+            to: wRes.bestMoveUci.slice(2, 4),
+            promotion: wRes.bestMoveUci[4] || undefined,
+          });
+          const san = mv ? mv.san : wRes.bestMoveUci;
+          setHintMove(
+            `Suggested Move: ${san} (${wRes.bestMoveUci.slice(0, 2)} -> ${wRes.bestMoveUci.slice(2, 4)}) [d${wRes.depth}, Eval: ${wRes.scoreCp >= 0 ? '+' : ''}${(wRes.scoreCp / 100).toFixed(2)}]`
+          );
+          return;
+        }
+      }
+    } catch {
+      // fall through to synchronous fallback
+    }
+    const bRes = searchIndependentBerserker(hintFen, 7, 700);
     if (bRes && bRes.bestMoveSan) {
       setHintMove(`Suggested Move: ${bRes.bestMoveSan} (${bRes.bestMoveUci.slice(0, 2)} -> ${bRes.bestMoveUci.slice(2, 4)}) [Eval: ${bRes.scoreCp >= 0 ? '+' : ''}${(bRes.scoreCp / 100).toFixed(2)}]`);
     }
@@ -1123,21 +701,21 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
             <div className="flex items-center gap-2">
               <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-purple-500/10 text-purple-400 border border-purple-500/20 flex items-center gap-1.5 shadow-sm">
                 <Gem className="w-3.5 h-3.5" />
-                Berserker v0.7.0-dev Grandmaster Core
+                Berserker v0.6.0 Grandmaster Core
               </span>
-              <span className="text-xs text-slate-400">Neural MCTS-DAG & Quad-Head BRnnue</span>
+              <span className="text-xs text-slate-400">Pure-PVS Alpha-Beta & Berserker NNUE</span>
             </div>
-            <h3 className="text-xl font-bold text-white mt-1">Play Against Berserker v0.7.0-dev</h3>
+            <h3 className="text-xl font-bold text-white mt-1">Play Against Berserker v0.6.0</h3>
             <p className="text-xs text-slate-400 mt-0.5">
-              64 Threads • 32 GB Hash • Threat-Space Prophylaxis II • Quad-Head BRnnue • Bayesian Dual Arbiter
+              C++20 WASM SIMD128 • Pure-PVS Alpha-Beta • Reckless Quantized NNUE (63MB)
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
-            {/* Live Real Engine Hardware Badge */}
-            <div className="flex items-center gap-1.5 bg-purple-500/10 border border-purple-500/30 px-3 py-1.5 rounded-xl text-xs font-mono font-semibold text-purple-300">
+            {/* Live Real Engine Runtime Badge */}
+            <div className="flex items-center gap-1.5 bg-purple-500/10 border border-purple-500/30 px-3 py-1.5 rounded-xl text-xs font-mono font-semibold text-purple-300 whitespace-nowrap">
               <span className="w-2 h-2 rounded-full bg-purple-400 animate-pulse" />
-              <span>64 Cores • 32,768 MB Hash</span>
+              <span>WASM SIMD128 • 64 MB Hash</span>
             </div>
 
             {/* Time Control Selector */}
@@ -1191,36 +769,6 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
               {showConsole ? 'Hide Console' : 'UCI Console'}
             </button>
 
-            {/* Chess960 Mode Toggle & Controls */}
-            <button
-              onClick={() => {
-                if (!isChess960) {
-                  handleStartChess960(518);
-                } else {
-                  handleStandardChessReset();
-                }
-              }}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border ${
-                isChess960 
-                  ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-md font-extrabold' 
-                  : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
-              }`}
-              title="Toggle Chess960 (Fischer Random Chess)"
-            >
-              <Shuffle className="w-3.5 h-3.5" />
-              {isChess960 ? `Chess960 (SP ${chess960SpIndex})` : 'Chess960'}
-            </button>
-
-            {isChess960 && (
-              <button
-                onClick={() => handleStartChess960()}
-                className="px-2.5 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 text-xs font-semibold flex items-center gap-1"
-                title="Generate Random Chess960 Starting Position"
-              >
-                🎲 Random SP
-              </button>
-            )}
-
             {/* New Game Button */}
             <button
               onClick={handleNewGame}
@@ -1238,7 +786,7 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
           {/* Left: Engine Profile Card + Chessboard + Player Profile Card */}
           <div className="lg:col-span-7 flex flex-col items-center gap-4">
             
-            {/* Opponent Card: Berserker 18 dev-7800f00 Engine */}
+            {/* Opponent Card: Berserker v0.6.0 C++20 WASM + Reckless NNUE */}
             <div className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3.5 flex flex-col gap-3 shadow-sm">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
@@ -1248,21 +796,23 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="font-bold text-sm text-white">
-                        Berserker 18 (Authentic HalfKP-Dual-1536 NNUE)
+                        Berserker v0.6.0 (C++20 WASM + Reckless NNUE)
                       </span>
                       <span className="text-[10px] px-2 py-0.5 rounded font-mono font-bold bg-purple-500/10 text-purple-300 border border-purple-500/30">
-                        3640+ Elo (Pure Berserker Search & SCReLU)
+                        Pure-PVS Alpha-Beta • SIMD128
                       </span>
                     </div>
 
                     <div className="text-[11px] text-slate-400 flex flex-wrap items-center gap-2 mt-1">
                       <span>{playerColor === 'w' ? 'Playing Black' : 'Playing White'}</span>
                       <span>•</span>
-                      <span className="text-purple-300 font-mono font-semibold">5.0s / move</span>
+                      <span className="text-purple-300 font-mono font-semibold">{thinkingTimeSec.toFixed(1)}s / move</span>
                       <span>•</span>
                       <span>Independent Engine</span>
                       <span>•</span>
-                      <span className="text-emerald-400 font-bold">100% In-Engine Search</span>
+                      <span className="text-emerald-400 font-bold">
+                        {isNnueReady ? 'Reckless NNUE Ready (63MB)' : isWasmReady ? 'WASM Ready' : 'Loading WASM + NNUE...'}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -1290,22 +840,21 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
               </div>
 
               {/* Exclusive Opponent Banner */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 border-t border-slate-900 text-xs">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-[11px] text-slate-400 font-semibold uppercase tracking-wider">Engine:</span>
-                  <div className="px-3 py-1 rounded-lg bg-gradient-to-r from-purple-950/90 to-indigo-950/90 border border-purple-500/40 text-purple-200 text-xs font-bold font-mono flex items-center gap-2 shadow-sm">
-                    <Gem className="w-3.5 h-3.5 text-purple-400" />
-                    <span>Berserker 18 (Authentic HalfKP-Dual-1536 NNUE)</span>
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-900 text-xs">
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-slate-400 font-semibold uppercase tracking-wider whitespace-nowrap">Engine:</span>
+                  <div className="px-2.5 py-1 rounded-lg bg-gradient-to-r from-purple-950/90 to-indigo-950/90 border border-purple-500/40 text-purple-200 text-[11px] font-bold font-mono flex items-center gap-1.5 shadow-sm whitespace-nowrap">
+                    <Gem className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+                    <span>Berserker v0.6.0-wasm</span>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-950/60 border border-emerald-500/40 text-[10px] font-mono font-bold text-emerald-300">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                    <span>Active Net: {activeNetId}</span>
-                    <span className="text-slate-400 font-normal">| Ep.{activeEpoch} (Loss: {activeLoss.toFixed(4)})</span>
+                  <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-950/60 border border-emerald-500/40 text-[10px] font-mono font-bold text-emerald-300 whitespace-nowrap">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+                    <span>{isNnueReady ? 'NNUE: v60-7f587dfb.nnue' : `Net: ${activeNetId}`}</span>
                   </div>
-                  <span className="text-[10px] font-mono text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/20">
-                    In-Engine Trained
+                  <span className="text-[10px] font-mono text-cyan-400 bg-cyan-500/10 px-2 py-1 rounded border border-cyan-500/20 whitespace-nowrap">
+                    PV = Played
                   </span>
                 </div>
               </div>
@@ -1490,27 +1039,33 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
                 <div className="bg-slate-900 p-2.5 rounded-lg border border-slate-800">
                   <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Depth</span>
                   <span className="font-mono font-bold text-emerald-400 text-sm">
-                    {isEngineThinking ? `d${simulatedDepth}/s${simulatedSeldepth}` : 'd18/s26'}
+                    {isEngineThinking
+                      ? (liveDepth > 0 ? `d${liveDepth}/s${liveSeldepth}` : '...')
+                      : (lastTelemetry.depth > 0 ? `d${lastTelemetry.depth}/s${lastTelemetry.seldepth}` : '—')}
                   </span>
-                  <span className="text-[9px] text-slate-500 block">PVS + SE 2.0</span>
+                  <span className="text-[9px] text-slate-500 block">Pure-PVS</span>
                 </div>
                 <div className="bg-slate-900 p-2.5 rounded-lg border border-slate-800">
                   <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Speed (NPS)</span>
                   <span className="font-mono font-bold text-cyan-400 text-sm">
-                    {isEngineThinking
-                      ? (simulatedNps >= 1e6 ? `${(simulatedNps / 1e6).toFixed(2)}M` : `${Math.round(simulatedNps / 1000)}k`)
-                      : '2.15M'}
+                    {(() => {
+                      const val = isEngineThinking ? liveNps : lastTelemetry.nps;
+                      if (!val) return '—';
+                      return val >= 1e6 ? `${(val / 1e6).toFixed(2)}M` : `${Math.max(1, Math.round(val / 1000))}k`;
+                    })()}
                   </span>
                   <span className="text-[9px] text-slate-500 block">nodes / sec</span>
                 </div>
                 <div className="bg-slate-900 p-2.5 rounded-lg border border-slate-800">
                   <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Nodes</span>
                   <span className="font-mono font-bold text-purple-300 text-sm">
-                    {isEngineThinking
-                      ? (simulatedNodes >= 1e6 ? `${(simulatedNodes / 1e6).toFixed(2)}M` : `${Math.round(simulatedNodes / 1000)}k`)
-                      : '14.2M'}
+                    {(() => {
+                      const val = isEngineThinking ? liveNodes : lastTelemetry.nodes;
+                      if (!val) return '—';
+                      return val >= 1e6 ? `${(val / 1e6).toFixed(2)}M` : val >= 1000 ? `${Math.round(val / 1000)}k` : `${val}`;
+                    })()}
                   </span>
-                  <span className="text-[9px] text-slate-500 block">64 Threads VNNI</span>
+                  <span className="text-[9px] text-slate-500 block">WASM SIMD128</span>
                 </div>
                 <div className="bg-slate-900 p-2.5 rounded-lg border border-slate-800">
                   <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Eval</span>
@@ -1521,11 +1076,14 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
                 </div>
               </div>
 
-              {/* Live PV line */}
-              {isEngineThinking && simulatedPv && (
-                <div className="text-[11px] font-mono text-slate-400 bg-slate-900 p-2 rounded-lg border border-slate-800 flex items-center gap-2">
+              {/* Live / Last Searched PV line */}
+              {(isEngineThinking ? livePv : lastTelemetry.pv) && (
+                <div
+                  data-testid="predicted-pv"
+                  className="text-[11px] font-mono text-slate-400 bg-slate-900 p-2 rounded-lg border border-slate-800 flex items-center gap-2"
+                >
                   <span className="text-purple-400 font-semibold">Predicted:</span>
-                  <span className="truncate">{simulatedPv}</span>
+                  <span className="truncate">{isEngineThinking ? livePv : lastTelemetry.pv}</span>
                 </div>
               )}
 
@@ -1817,7 +1375,7 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
               <div className="overflow-y-auto max-h-[180px] pr-1 space-y-1 font-mono text-xs">
                 {moveHistory.length === 0 ? (
                   <p className="text-xs text-slate-500 italic py-4 text-center">
-                    {playerColor === 'w' ? 'Make your first move on the board!' : 'Berserker 18 dev-7800f00 is calculating move 1...'}
+                    {playerColor === 'w' ? 'Make your first move on the board!' : 'Berserker v0.6.0-wasm is calculating move 1...'}
                   </p>
                 ) : (
                   moveHistory.map((m, idx) => (
@@ -1842,14 +1400,14 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <Terminal className="w-4 h-4 text-purple-400" />
-                <h4 className="font-bold text-sm text-white">Live Berserker v0.4.0 UCI Terminal</h4>
+                <h4 className="font-bold text-sm text-white">Live Berserker v0.6.0-wasm UCI Terminal</h4>
                 <span className="text-[10px] font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded">
-                  {isWasmReady ? 'READY (BRNNUEV030 DUAL ACTIVE)' : 'INITIALIZING'}
+                  {isWasmReady && isNnueReady ? 'READY (WASM + RECKLESS NNUE)' : isWasmReady ? 'WASM READY' : 'INITIALIZING'}
                 </span>
               </div>
               <div className="flex items-center gap-1.5 overflow-x-auto text-xs font-mono">
                 <span className="text-[11px] text-slate-400 mr-1">Quick UCI:</span>
-                {['d', 'eval', 'go depth 12', 'bench', 'uci'].map((cmd) => (
+                {['d', 'eval', 'go depth 8', 'bench', 'uci'].map((cmd) => (
                   <button
                     key={cmd}
                     onClick={() => sendWasmCommand(cmd)}
@@ -1858,6 +1416,12 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
                     {cmd}
                   </button>
                 ))}
+                <button
+                  onClick={clearWasmLogs}
+                  className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 border border-slate-700 transition"
+                >
+                  clear
+                </button>
               </div>
             </div>
 
@@ -1912,17 +1476,3 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
     </div>
   );
 };
-
-// Internal icon helper
-const SwordsIcon: React.FC<{ className?: string }> = ({ className = "w-4 h-4" }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="14.5 17.5 3 6 3 3 6 3 17.5 14.5" />
-    <line x1="13" y1="19" x2="19" y2="13" />
-    <line x1="16" y1="16" x2="20" y2="20" />
-    <line x1="19" y1="21" x2="21" y2="19" />
-    <polyline points="14.5 6.5 18 3 21 3 21 6 17.5 9.5" />
-    <line x1="5" y1="14" x2="9" y2="18" />
-    <line x1="7" y1="17" x2="4" y2="20" />
-    <line x1="3" y1="19" x2="5" y2="21" />
-  </svg>
-);

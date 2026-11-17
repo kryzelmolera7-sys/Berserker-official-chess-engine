@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
+    "build:wasm": "clang++ --target=wasm32 -std=c++20 -O3 -msimd128 -mbulk-memory -fno-exceptions -fno-rtti -nostdlib -Wall -Wextra -Wno-unused-parameter -Wl,--no-entry,--export-dynamic,--initial-memory=150994944,--max-memory=268435456 -Wl,-z,stack-size=1048576 -o public/berserker-engine.wasm src/engine/cpp/berserker.cpp",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

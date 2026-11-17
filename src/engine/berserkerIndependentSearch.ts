@@ -17,7 +17,10 @@
 
 import { Chess, Move } from 'chess.js';
 import { evaluateBerserkerNnue, BerserkerNnueEval } from './berserkerNnue';
-import { evaluateBRnnueV070, BRnnueV070QuadEval } from './brnnueDualEval';
+import { evaluateBRnnueV030, BRnnueV030Eval } from './brnnueDualEval';
+import { FastBoard } from './fastBoard';
+import { searchFast, clearFastSearchState } from './fastSearch';
+import { getCachedWasmEngine, getNodeWasmEngineSync } from './wasmEngine';
 
 export type SearchNodeType = 'EXACT' | 'LOWERBOUND' | 'UPPERBOUND';
 
@@ -28,14 +31,6 @@ export interface TTEntry {
   flag: SearchNodeType;
   bestMoveSan: string;
   bestMoveUci: string;
-}
-
-export interface MultiPvCandidateLine {
-  rank: number;
-  scoreCp: number;
-  bestMoveSan: string;
-  bestMoveUci: string;
-  pv: string[];
 }
 
 export interface SearchStatistics {
@@ -51,7 +46,6 @@ export interface SearchStatistics {
   pv: string[];
   evalDetails: BerserkerNnueEval;
   ttHits: number;
-  multiPvLines?: MultiPvCandidateLine[];
 }
 
 // MVV-LVA Table: [Victim][Attacker]
@@ -88,9 +82,6 @@ const captureHistoryTable = new Int32Array(2 * 64 * 64);
 // Killer Moves Table: [depth 0-64][slot 0-1]
 const killerMoves: (string | null)[][] = Array.from({ length: 64 }, () => [null, null]);
 
-// Static Evaluation Stack for Improving Heuristic [ply 0-127]
-const staticEvalStack: number[] = new Array(128).fill(0);
-
 // Simple In-Memory Transposition Table (50,000 entries max for web runtime)
 const transpositionTable = new Map<string, TTEntry>();
 const MAX_TT_ENTRIES = 50000;
@@ -105,6 +96,36 @@ export function pieceToIdx(piece: string, color: 'w' | 'b'): number {
   const pieceMap: Record<string, number> = { p: 0, n: 1, b: 2, r: 3, q: 4, k: 5 };
   const base = pieceMap[piece.toLowerCase()] || 0;
   return base + (color === 'b' ? 6 : 0);
+}
+
+let fixTtOrigAlphaEnabled = true;
+
+export function setFixTtOrigAlpha(enabled: boolean): void {
+  fixTtOrigAlphaEnabled = !!enabled;
+}
+
+export function isFixTtOrigAlphaEnabled(): boolean {
+  return fixTtOrigAlphaEnabled;
+}
+
+export function clearIndependentSearchState(): void {
+  transpositionTable.clear();
+  conthistTable.fill(0);
+  conthist2PlyTable.fill(0);
+  captureHistoryTable.fill(0);
+  pawnCorrHist[0].fill(0);
+  pawnCorrHist[1].fill(0);
+  nonPawnCorrHist[0].fill(0);
+  nonPawnCorrHist[1].fill(0);
+  for (let i = 0; i < 64; i++) {
+    killerMoves[i][0] = null;
+    killerMoves[i][1] = null;
+    historyTable[0][i].fill(0);
+    historyTable[1][i].fill(0);
+  }
+  clearFastSearchState();
+  const wasm = getCachedWasmEngine() ?? getNodeWasmEngineSync();
+  if (wasm) wasm.newGame();
 }
 
 // Fast hash key for pawn structure in CorrHist
@@ -155,25 +176,26 @@ function applyFiftyMoveDecay(score: number, fen: string): number {
  */
 export function staticExchangeEvaluation(chess: Chess, move: Move): number {
   if (!move.captured && !move.promotion) return 0;
+  try {
+    const fb = new FastBoard(chess.fen());
+    const fromSq = squareToIdx(move.from);
+    const toSq = squareToIdx(move.to);
+    const legal = fb.getLegalMoves();
+    const promoPt =
+      move.promotion === 'q' ? 5 :
+      move.promotion === 'r' ? 4 :
+      move.promotion === 'b' ? 3 :
+      move.promotion === 'n' ? 2 : 0;
+    const enc = legal.find((m: number) => (m & 63) === fromSq && ((m >>> 6) & 63) === toSq && ((m >>> 12) & 7) === promoPt);
+    if (enc !== undefined) {
+      return fb.staticExchangeEvaluation(enc);
+    }
+  } catch {
+    // fallback below
+  }
   const victimVal = (move.captured ? (PIECE_VALUES[move.captured] || 100) : 0) + (move.promotion ? (PIECE_VALUES[move.promotion] || 900) - 100 : 0);
   const attackerVal = PIECE_VALUES[move.piece] || 100;
-
-  // Equal or winning victim trade is guaranteed non-negative
-  if (victimVal >= attackerVal) return victimVal;
-
-  const toSquare = move.to;
-  try {
-    const clone = new Chess(chess.fen());
-    clone.move(move);
-    const oppMoves = clone.moves({ verbose: true });
-    const oppCaptures = oppMoves.filter((m) => m.to === toSquare);
-    if (oppCaptures.length === 0) {
-      return victimVal; // Undefended target piece
-    }
-    return victimVal - attackerVal;
-  } catch {
-    return victimVal - attackerVal;
-  }
+  return victimVal >= attackerVal ? victimVal : victimVal - attackerVal;
 }
 
 /**
@@ -218,11 +240,6 @@ function scoreMoveForOrdering(
     if (killerMoves[ply][1] === uci) return 40000;
   }
 
-  // Castling Priority: King safety and rook activation are paramount (especially in Chess960)
-  if (move.san === 'O-O' || move.san === 'O-O-O' || (move as any).isChess960Castling) {
-    return 45000;
-  }
-
   // Continuation History (Conthist)
   let conthistBonus = 0;
   if (lastMove) {
@@ -250,8 +267,8 @@ function quiescenceSearch(
 ): number {
   stats.qnodes++;
 
-  // Stand-Pat Evaluation using Berserker v0.7.0 BRnnuev070 Quad NNUE + Squeeze Matrix
-  const evalResult = evaluateBRnnueV070(chess.fen());
+  // Stand-Pat Evaluation using Berserker v0.3.0 BRnnuev030 Dual NNUE
+  const evalResult = evaluateBRnnueV030(chess.fen());
   const standPat = evalResult.evalCpPerspective;
 
   if (qdepth >= maxQdepth) {
@@ -373,12 +390,11 @@ function pvsSearch(
   // Static evaluation with Correction History (CorrHist) and Fifty-Move Decay
   let rawStaticEval = 0;
   let staticEval = 0;
-  let improving = false;
   const turn = chess.turn();
   const colorIdx = turn === 'w' ? 0 : 1;
 
   if (!inCheck) {
-    rawStaticEval = evaluateBRnnueV070(chess.fen()).evalCpPerspective;
+    rawStaticEval = evaluateBRnnueV030(chess.fen()).evalCpPerspective;
     const board = chess.board();
     const pKey = computePawnKey(board);
     const npKey = computeNonPawnKey(board);
@@ -389,28 +405,13 @@ function pvsSearch(
     staticEval = Math.max(-25000, Math.min(25000, rawStaticEval + corrAdjustment));
     // Anti-shuffle decay: forces decisive pawn conversions instead of drifting to 50-move draw
     staticEval = applyFiftyMoveDecay(staticEval, chess.fen());
-    if (ply < 128) {
-      staticEvalStack[ply] = staticEval;
-      improving = ply >= 2 && staticEval > staticEvalStack[ply - 2];
-    }
   }
 
-  // 1. Reverse Futility Pruning (RFP / Static Null Move Pruning) with Improving Heuristic
+  // 1. Reverse Futility Pruning (RFP / Static Null Move Pruning)
   if (depth <= 6 && !inCheck && !isRoot && Math.abs(beta) < 9000) {
-    const rfpMargin = depth * (improving ? 75 : 60);
+    const rfpMargin = depth * 75;
     if (staticEval - rfpMargin >= beta) {
       return staticEval;
-    }
-  }
-
-  // 1b. Razoring (Depth 1-3): If static eval is hopelessly below alpha, verify with Q-Search
-  if (depth <= 3 && !inCheck && !isRoot && Math.abs(alpha) < 9000) {
-    const razorMargin = 260 + depth * 85;
-    if (staticEval + razorMargin <= alpha) {
-      const qScore = quiescenceSearch(chess, alpha, alpha + 1, 0, 4, stats);
-      if (qScore <= alpha) {
-        return qScore;
-      }
     }
   }
 
@@ -525,18 +526,16 @@ function pvsSearch(
   let movesSearched = 0;
 
   for (const move of moves) {
-    const isCastling = move.san === 'O-O' || move.san === 'O-O-O' || (move as any).isChess960Castling;
-
     // 7. Late Move Pruning (LMP): Prune unpromising quiet moves after searching threshold moves
     if (depth <= 4 && !inCheck && !isRoot && movesSearched >= (3 + 3 * depth * depth)) {
-      if (!move.captured && !move.san.includes('+') && !isCastling) {
+      if (!move.captured && !move.san.includes('+')) {
         continue;
       }
     }
 
     // 8. Futility Pruning: At shallow depths, skip unpromising quiet moves that cannot beat alpha
     if (depth <= 2 && !inCheck && !isRoot && Math.abs(alpha) < 9000) {
-      if (!move.captured && !move.san.includes('+') && !isCastling) {
+      if (!move.captured && !move.san.includes('+')) {
         if (staticEval + 120 * depth <= alpha) {
           continue;
         }
@@ -549,22 +548,14 @@ function pvsSearch(
     let score: number;
     const subPv: string[] = [];
 
-    // Principal Variation Search logic with Singular & Passed Pawn Extensions:
-    let moveExtension = singularExtension;
-    // 7th Rank Passed Pawn Push Extension (+1 ply for imminent promotion)
-    if (move.piece === 'p' && ((turn === 'w' && move.to[1] === '7') || (turn === 'b' && move.to[1] === '2'))) {
-      moveExtension = Math.max(moveExtension, 1);
-    }
-
+    // Principal Variation Search logic:
     if (movesSearched === 1) {
-      score = -pvsSearch(chess, depth - 1 + moveExtension, ply + 1, -beta, -alpha, stats, subPv, move);
+      score = -pvsSearch(chess, depth - 1 + singularExtension, ply + 1, -beta, -alpha, stats, subPv, move);
     } else {
-      // Dynamic Late Move Reductions (LMR) with History Dampening, Check Immunity & Improving Heuristic
+      // Dynamic Late Move Reductions (LMR) with History Dampening & Check Immunity
       let reduction = 0;
-      if (depth >= 3 && movesSearched >= 3 && !move.captured && !move.promotion && !isCastling && !inCheck) {
+      if (depth >= 3 && movesSearched >= 3 && !move.captured && !move.promotion && !inCheck) {
         reduction = 1 + Math.floor(Math.log(depth) * Math.log(movesSearched) / 2.1);
-        if (improving) reduction -= 1;
-        else reduction += 1;
 
         // History Dampening: High history moves are less reduced
         const fromIdx = squareToIdx(move.from);
@@ -696,168 +687,65 @@ export function searchIndependentBerserker(
   timeLimitMs: number = 800,
   multiPv: number = 1
 ): SearchStatistics {
-  const chess = new Chess(fen);
-  const startTime = performance.now();
-
-  const stats = {
-    nodes: 0,
-    qnodes: 0,
-    seldepth: 0,
-    ttHits: 0,
-  };
-
-  let bestScore = 0;
-  let bestMoveSan = '';
-  let bestMoveUci = '';
-  let principalVariation: string[] = [];
-
-  // Best-Move Stability Allocation Time Manager
-  let lastBestMoveUci = '';
-  let moveFlips = 0;
-  let stableIterations = 0;
-
-  for (let currentDepth = 1; currentDepth <= maxDepth; currentDepth++) {
-    let delta = 25;
-    let alpha = -30000;
-    let beta = 30000;
-    let pvForDepth: string[] = [];
-    let score = 0;
-
-    if (currentDepth >= 4) {
-      alpha = Math.max(-30000, bestScore - delta);
-      beta = Math.min(30000, bestScore + delta);
-
-      // Progressive Aspiration Window Loop
-      while (true) {
-        pvForDepth = [];
-        score = pvsSearch(chess, currentDepth, 0, alpha, beta, stats, pvForDepth, null);
-
-        if (score <= alpha) {
-          // Fail-low: Tactical danger or inaccuracy detected!
-          // Widen alpha and record move instability to give more time
-          alpha = Math.max(-30000, alpha - delta * 2);
-          delta = Math.floor(delta * 1.6) + 15;
-          moveFlips += 2;
-        } else if (score >= beta) {
-          // Fail-high: Unexpected winning refutation!
-          beta = Math.min(30000, beta + delta * 2);
-          delta = Math.floor(delta * 1.6) + 15;
-        } else {
-          break; // Score fell cleanly within window
-        }
-
-        if (alpha <= -20000 && beta >= 20000) {
-          pvForDepth = [];
-          score = pvsSearch(chess, currentDepth, 0, -30000, 30000, stats, pvForDepth, null);
-          break;
-        }
-      }
-    } else {
-      score = pvsSearch(chess, currentDepth, 0, -30000, 30000, stats, pvForDepth, null);
-    }
-
-    bestScore = score;
-    if (pvForDepth.length > 0) {
-      principalVariation = [...pvForDepth];
-      bestMoveSan = pvForDepth[0];
-      const moves = chess.moves({ verbose: true });
-      const foundMove = moves.find((m) => m.san === bestMoveSan);
-      if (foundMove) {
-        bestMoveUci = `${foundMove.from}${foundMove.to}${foundMove.promotion || ''}`;
-      }
-    }
-
-    const elapsed = performance.now() - startTime;
-
-    // Time Management: Adjust stop threshold dynamically based on move stability
-    if (bestMoveUci === lastBestMoveUci) {
-      stableIterations++;
-      if (stableIterations >= 3 && currentDepth >= 4 && elapsed > timeLimitMs * 0.55 && moveFlips === 0) {
-        break; // Solid, unambiguous move: preserve clock
-      }
-    } else {
-      lastBestMoveUci = bestMoveUci;
-      stableIterations = 0;
-      moveFlips++;
-    }
-
-    // Dynamic Time Ceiling: Unstable best-move extends budget up to 95% of limit
-    const dynamicLimit = moveFlips >= 2 ? timeLimitMs * 0.95 : timeLimitMs * 0.70;
-    if (elapsed > dynamicLimit) {
-      break;
-    }
-  }
-
-  // Multi-PV candidate lines generation
-  const multiPvLines: MultiPvCandidateLine[] = [];
-  if (bestMoveUci) {
-    multiPvLines.push({
-      rank: 1,
-      scoreCp: bestScore,
-      bestMoveSan,
-      bestMoveUci,
-      pv: principalVariation,
-    });
-  }
-
-  if (multiPv > 1) {
-    const legalMoves = chess.moves({ verbose: true });
-    const excludedUcis = new Set<string>([bestMoveUci]);
-
-    for (let rank = 2; rank <= Math.min(multiPv, legalMoves.length); rank++) {
-      let altBestScore = -30000;
-      let altBestMoveSan = '';
-      let altBestMoveUci = '';
-      let altPv: string[] = [];
-
-      for (const m of legalMoves) {
-        const uci = `${m.from}${m.to}${m.promotion || ''}`;
-        if (excludedUcis.has(uci)) continue;
-
-        chess.move(m);
-        const subPv: string[] = [];
-        const s = -pvsSearch(chess, Math.max(1, maxDepth - 1), 1, -30000, 30000, stats, subPv, m);
-        chess.undo();
-
-        if (s > altBestScore) {
-          altBestScore = s;
-          altBestMoveSan = m.san;
-          altBestMoveUci = uci;
-          altPv = [m.san, ...subPv];
-        }
-      }
-
-      if (altBestMoveUci) {
-        excludedUcis.add(altBestMoveUci);
-        multiPvLines.push({
-          rank,
-          scoreCp: altBestScore,
-          bestMoveSan: altBestMoveSan,
-          bestMoveUci: altBestMoveUci,
-          pv: altPv,
-        });
-      }
-    }
-  }
-
-  const elapsedMs = Math.max(1, performance.now() - startTime);
-  const nps = Math.round((stats.nodes / elapsedMs) * 1000);
+  const wasm = getCachedWasmEngine() ?? getNodeWasmEngineSync();
   const evalDetails = evaluateBerserkerNnue(fen);
 
-  return {
-    nodes: stats.nodes + stats.qnodes,
-    qnodes: stats.qnodes,
+  if (wasm) {
+    if (multiPv > 1) wasm.setMultiPv(multiPv);
+    const wRes = wasm.search(fen, maxDepth, timeLimitMs);
+    if (multiPv > 1) wasm.setMultiPv(1);
+
+    // Convert UCI PV to SAN PV via chess.js while preserving exact bestMoveUci === pvUci[0]
+    const pvSan: string[] = [];
+    try {
+      const c = new Chess(fen);
+      for (const u of wRes.pv) {
+        if (!u || u.length < 4) break;
+        const mv = c.move({ from: u.slice(0, 2), to: u.slice(2, 4), promotion: u[4] || undefined });
+        if (!mv) break;
+        pvSan.push(mv.san);
+      }
+    } catch {
+      // ignore conversion errors
+    }
+
+    return {
+      nodes: wRes.nodes,
+      qnodes: 0,
+      depth: wRes.depth,
+      seldepth: wRes.seldepth,
+      timeMs: wRes.timeMs,
+      nps: wRes.nps,
+      scoreCp: wRes.scoreCp,
+      bestMoveSan: pvSan[0] || wRes.bestMoveUci,
+      bestMoveUci: wRes.bestMoveUci,
+      pv: pvSan.length > 0 ? pvSan : wRes.pv,
+      evalDetails,
+      ttHits: 0,
+    };
+  }
+
+  // Fallback to fast TypedArray Pure-PVS search (browser before async WASM load)
+  const fastRes = searchFast({
+    fen,
     depth: maxDepth,
-    seldepth: stats.seldepth,
-    timeMs: Math.round(elapsedMs),
-    nps,
-    scoreCp: bestScore,
-    bestMoveSan,
-    bestMoveUci,
-    pv: principalVariation,
+    maxTimeMs: timeLimitMs,
+    multiPv,
+  });
+
+  return {
+    nodes: fastRes.nodes + fastRes.qnodes,
+    qnodes: fastRes.qnodes,
+    depth: fastRes.depth,
+    seldepth: fastRes.seldepth,
+    timeMs: fastRes.timeMs,
+    nps: fastRes.nps,
+    scoreCp: fastRes.scoreCp,
+    bestMoveSan: fastRes.bestMoveSan,
+    bestMoveUci: fastRes.bestMoveUci,
+    pv: fastRes.pvSan.length > 0 ? fastRes.pvSan : fastRes.pv,
     evalDetails,
-    ttHits: stats.ttHits,
-    multiPvLines,
+    ttHits: fastRes.ttHits,
   };
 }
 

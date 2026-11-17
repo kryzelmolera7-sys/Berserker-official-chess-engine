@@ -15,24 +15,19 @@ import {
 } from 'lucide-react';
 import { useBerserkerEngine } from './useBerserkerEngine';
 import { evaluateAuraNnue } from './engine/auraNnue';
-import { evaluateBerserkerNnue } from './engine/berserkerNnue';
-import { evaluateBRnnueV030, evaluateBRnnueV070, evaluateBerserker10Nnue } from './engine/brnnueDualEval';
-import { getChess960PositionInfo, getRandomChess960Index } from './engine/chess960';
+import { evaluateBerserker10Nnue } from './engine/brnnueDualEval';
 
 export const UciEngineConsole: React.FC = () => {
   const {
     isReady,
+    isNnueReady,
     isSearching,
     searchInfo,
     bestMove,
-    multiPvCandidates,
     rawLogs,
-    startSearch,
-    startInfiniteSearch,
-    stopSearch,
+    clearLogs,
     sendCommand,
     setOption,
-    setMultiPv
   } = useBerserkerEngine();
 
   const [inputCmd, setInputCmd] = useState<string>('uci');
@@ -40,9 +35,8 @@ export const UciEngineConsole: React.FC = () => {
   const [activeEvalMode, setActiveEvalMode] = useState<'brnnue-v030' | 'berserker-1.0-nnue' | 'aura-nnue'>('brnnue-v030');
   const [customFen, setCustomFen] = useState<string>('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
   const [localLogs, setLocalLogs] = useState<string[]>([
-    'Berserker v0.7.0-dev Standalone Engine Core Initialized.',
-    'Default Neural Evaluator: Berserker NNUE v0.7.0 Quad-Head Architecture.',
-    'Search Core: Neural MCTS-DAG + Threat-Space Prophylaxis II + Bayesian Arbiter.',
+    'Berserker v0.6.0 C++20 WebAssembly Engine Initializing...',
+    'Neural Network: Reckless 63 MB Quantized NNUE (v60-7f587dfb.nnue) • Pure-PVS Alpha-Beta',
     'Type UCI commands below or click quick-actions.',
     '--------------------------------------------------------------------------------'
   ]);
@@ -60,40 +54,29 @@ export const UciEngineConsole: React.FC = () => {
     setLocalLogs((prev) => [...prev, `> ${cmd}`]);
 
     if (cmd === 'eval') {
-      if (activeEvalMode === 'brnnue-v030') {
-        const dualEval = evaluateBRnnueV030(customFen);
-        setLocalLogs((prev) => [
-          ...prev,
-          `[Berserker NNUE Dual Architecture] Eval: ${dualEval.centipawns > 0 ? '+' : ''}${(dualEval.centipawns / 100).toFixed(2)} (${dualEval.centipawns} cp)`,
-          `  • Subnet 1 (Berserker Attack):     ${dualEval.berserker090.centipawns > 0 ? '+' : ''}${(dualEval.berserker090.centipawns / 100).toFixed(2)} (${(dualEval.phaseWeight.berserkerWeight * 100).toFixed(0)}% weight)`,
-          `  • Subnet 2 (Berserker Positional): ${dualEval.plentychess.centipawns > 0 ? '+' : ''}${(dualEval.plentychess.centipawns / 100).toFixed(2)} (${(dualEval.phaseWeight.plentyChessWeight * 100).toFixed(0)}% weight)`,
-          `  • Phase: ${dualEval.phaseWeight.gamePhase} | Tension: ${dualEval.tacticalTensionIndex} pts | Net: ${dualEval.netId}`,
-          `  • WDL: Win ${(dualEval.winProb * 100).toFixed(1)}% | Draw ${(dualEval.drawProb * 100).toFixed(1)}% | Loss ${(dualEval.lossProb * 100).toFixed(1)}%`
-        ]);
-      } else if (activeEvalMode === 'berserker-1.0-nnue') {
+      if (activeEvalMode === 'berserker-1.0-nnue') {
         const bsz10Eval = evaluateBerserker10Nnue(customFen);
         setLocalLogs((prev) => [
           ...prev,
-          `[Berserker 1.0 NNUE] Eval: ${bsz10Eval.centipawns > 0 ? '+' : ''}${(bsz10Eval.centipawns / 100).toFixed(2)} (${bsz10Eval.centipawns} cp)`,
-          `[Berserker 1.0 NNUE] Net: ${bsz10Eval.netId} (Previous Single-Perspective Baseline)`,
-          `[Berserker 1.0 NNUE] WDL: Win ${(bsz10Eval.winProb * 100).toFixed(1)}% | Loss ${((1 - bsz10Eval.winProb) * 100).toFixed(1)}%`
+          `[Berserker 1.0 Baseline] Eval: ${bsz10Eval.centipawns > 0 ? '+' : ''}${(bsz10Eval.centipawns / 100).toFixed(2)} (${bsz10Eval.centipawns} cp)`
         ]);
-      } else {
+      } else if (activeEvalMode === 'aura-nnue') {
         const auraEval = evaluateAuraNnue(customFen);
         setLocalLogs((prev) => [
           ...prev,
-          `[AURA-NNUE] Eval: ${auraEval.centipawns > 0 ? '+' : ''}${(auraEval.centipawns / 100).toFixed(2)} (${auraEval.centipawns} cp)`,
-          `[AURA-NNUE] Active MoE Expert: ${auraEval.activeExpert} (${(auraEval.routingConfidence * 100).toFixed(0)}% weight)`,
-          `[AURA-NNUE] WDL: Win ${(auraEval.winProb * 100).toFixed(1)}% | Draw ${(auraEval.drawProb * 100).toFixed(1)}% | Loss ${(auraEval.lossProb * 100).toFixed(1)}%`
+          `[AURA-NNUE] Eval: ${auraEval.centipawns > 0 ? '+' : ''}${(auraEval.centipawns / 100).toFixed(2)} (${auraEval.centipawns} cp) | Expert: ${auraEval.activeExpert}`
         ]);
       }
+      // Always dispatch to the WASM worker so the genuine v60-7f587dfb.nnue net evaluates the worker's current position
+      sendCommand('eval');
+      if (!cmdToSend) setInputCmd('');
       return;
     }
 
     if (cmd.startsWith('position fen ')) {
       const fenPart = cmd.replace('position fen ', '').trim();
       setCustomFen(fenPart.split(' moves ')[0]);
-    } else if (cmd === 'position startpos') {
+    } else if (cmd === 'position startpos' || cmd.startsWith('position startpos ')) {
       setCustomFen('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
     }
 
@@ -108,15 +91,12 @@ export const UciEngineConsole: React.FC = () => {
       {/* Engine Status Header */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40">
-              Berserker 18 v0.2.0-alpha
+              Berserker v0.6.0-wasm
             </span>
             <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-              +570 Elo vs v0.9.0
-            </span>
-            <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-orange-500/20 text-orange-300 border border-orange-500/30 flex items-center gap-1">
-              🦀 Native Rust v0.7.0 (7.5M NPS)
+              {isNnueReady ? 'NNUE Active (63MB SIMD)' : isReady ? 'WASM Ready' : 'Loading WASM + NNUE...'}
             </span>
             <span className="text-xs text-slate-400 font-mono">
               Status: {isReady ? 'Engine Ready (UCI)' : 'Booting...'}
@@ -127,7 +107,7 @@ export const UciEngineConsole: React.FC = () => {
             Standalone UCI Engine Terminal
           </h2>
           <p className="text-xs text-slate-400">
-            Raw UCI console interface • Communicating directly with Berserker 18 search core
+            Raw UCI console interface • Communicating directly with C++20 WASM + v60-7f587dfb.nnue worker
           </p>
         </div>
 
@@ -138,7 +118,7 @@ export const UciEngineConsole: React.FC = () => {
             onClick={() => {
               setActiveEvalMode('brnnue-v030');
               setOption('EvalMode', 'brnnue-v030');
-              setLocalLogs((p) => [...p, '[UCI] Switched evaluator to Berserker NNUE (Dual Subnet Architecture)']);
+              setLocalLogs((p) => [...p, '[UCI] Evaluator: Reckless Quantized NNUE (v60-7f587dfb.nnue WASM SIMD)']);
             }}
             className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold transition flex items-center gap-1.5 ${
               activeEvalMode === 'brnnue-v030'
@@ -147,13 +127,13 @@ export const UciEngineConsole: React.FC = () => {
             }`}
           >
             <Cpu className="w-3.5 h-3.5" />
-            BRnnuev030
+            NNUE (63MB)
           </button>
           <button
             onClick={() => {
               setActiveEvalMode('berserker-1.0-nnue');
               setOption('EvalMode', 'berserker-1.0-nnue');
-              setLocalLogs((p) => [...p, '[UCI] Switched evaluator to Berserker 1.0 NNUE (Previous Baseline)']);
+              setLocalLogs((p) => [...p, '[UCI] Added Berserker 1.0 baseline comparison readout']);
             }}
             className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold transition flex items-center gap-1.5 ${
               activeEvalMode === 'berserker-1.0-nnue'
@@ -168,7 +148,7 @@ export const UciEngineConsole: React.FC = () => {
             onClick={() => {
               setActiveEvalMode('aura-nnue');
               setOption('EvalMode', 'aura-nnue');
-              setLocalLogs((p) => [...p, '[UCI] Switched evaluator to Aura-NNUE (GeoSparse-MoE)']);
+              setLocalLogs((p) => [...p, '[UCI] Added Aura-NNUE (GeoSparse-MoE) secondary readout']);
             }}
             className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold transition flex items-center gap-1.5 ${
               activeEvalMode === 'aura-nnue'
@@ -190,7 +170,7 @@ export const UciEngineConsole: React.FC = () => {
             <span className="w-3 h-3 rounded-full bg-rose-500/80 inline-block" />
             <span className="w-3 h-3 rounded-full bg-amber-500/80 inline-block" />
             <span className="w-3 h-3 rounded-full bg-emerald-500/80 inline-block" />
-            <span className="text-slate-400 ml-2 font-semibold">berserker@uci-shell:~$</span>
+            <span className="text-slate-400 ml-2 font-semibold">berserker@wasm-uci:~$</span>
           </div>
 
           <div className="flex items-center gap-2">
@@ -214,6 +194,7 @@ export const UciEngineConsole: React.FC = () => {
             <button
               onClick={() => {
                 setLocalLogs([]);
+                clearLogs();
               }}
               className="p-1.5 hover:bg-slate-800 text-slate-400 hover:text-rose-400 rounded transition"
               title="Clear terminal"
@@ -228,16 +209,17 @@ export const UciEngineConsole: React.FC = () => {
           {allLogs.map((logLine, idx) => {
             const isUserCmd = logLine.startsWith('>');
             const isBestMove = logLine.startsWith('bestmove');
+            const isNnueInfo = logLine.startsWith('info string NNUE') || logLine.includes('v60-7f587dfb.nnue');
             const isInfo = logLine.startsWith('info');
             const isReady = logLine.includes('readyok') || logLine.includes('uciok');
-            const isEval = logLine.includes('[SF-NNUE]') || logLine.includes('[AURA-NNUE]');
+            const isEval = isNnueInfo || logLine.includes('[Berserker') || logLine.includes('[AURA-NNUE]');
 
             let colorClass = 'text-slate-300';
             if (isUserCmd) colorClass = 'text-amber-300 font-bold';
             else if (isBestMove) colorClass = 'text-emerald-400 font-bold bg-emerald-950/30 px-1 py-0.5 rounded';
             else if (isReady) colorClass = 'text-cyan-400 font-bold';
-            else if (isInfo) colorClass = 'text-purple-300/90';
             else if (isEval) colorClass = 'text-sky-300 font-semibold';
+            else if (isInfo) colorClass = 'text-purple-300/90';
 
             return (
               <div key={idx} className={`${colorClass} leading-relaxed break-all`}>
@@ -273,7 +255,7 @@ export const UciEngineConsole: React.FC = () => {
             onClick={() => handleSend('eval')}
             className="px-2.5 py-1 rounded bg-purple-950 hover:bg-purple-900 text-purple-300 border border-purple-800 transition font-bold"
           >
-            eval ({activeEvalMode === 'brnnue-v030' ? 'BRnnuev030' : activeEvalMode === 'berserker-1.0-nnue' ? 'Berserker 1.0' : 'Aura-NNUE'})
+            eval (NNUE)
           </button>
           <button
             onClick={() => handleSend('position startpos')}
@@ -282,66 +264,16 @@ export const UciEngineConsole: React.FC = () => {
             position startpos
           </button>
           <button
-            onClick={() => {
-              const sp = getRandomChess960Index();
-              const info = getChess960PositionInfo(sp);
-              handleSend('setoption name UCI_Chess960 value true');
-              handleSend(`position fen ${info.fen}`);
-              setLocalLogs((p) => [...p, `[Chess960] Loaded SP ${sp}: [${info.backrank}] - ${info.fen}`]);
-            }}
-            className="px-2.5 py-1 rounded bg-amber-950 hover:bg-amber-900 text-amber-300 border border-amber-800 transition font-bold"
-          >
-            🎲 Chess960 Random
-          </button>
-          <button
-            onClick={() => {
-              setMultiPv(3);
-              setOption('MultiPV', 3);
-              setLocalLogs((p) => [...p, '[UCI] MultiPV set to 3 candidate lines']);
-            }}
-            className="px-2.5 py-1 rounded bg-purple-950 hover:bg-purple-900 text-purple-300 border border-purple-800 transition text-xs font-semibold"
-          >
-            MultiPV: 3
-          </button>
-          <button
-            onClick={() => handleSend('go depth 15')}
+            onClick={() => handleSend('go depth 10')}
             className="px-2.5 py-1 rounded bg-emerald-950 hover:bg-emerald-900 text-emerald-300 border border-emerald-800 transition font-bold"
           >
-            go depth 15
+            go depth 10
           </button>
           <button
-            onClick={async () => {
-              setLocalLogs((p) => [...p, '> [Native Rust Engine] Executing 10-ply release benchmark...']);
-              try {
-                const res = await fetch('/api/rust/search', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ fen: customFen, depth: 8, movetime: 1500 }),
-                });
-                const data = await res.json();
-                if (data.infoLines) {
-                  setLocalLogs((p) => [...p, ...data.infoLines, `bestmove ${data.bestmove}`, `⚡ [Berserker Rust] Search completed successfully with native SIMD throughput!`]);
-                }
-              } catch (e: any) {
-                setLocalLogs((p) => [...p, `[Rust Engine Error] ${e.message}`]);
-              }
-            }}
-            className="px-2.5 py-1 rounded bg-orange-950 hover:bg-orange-900 text-orange-300 border border-orange-800 transition font-bold flex items-center gap-1"
-          >
-            🦀 Rust Native Search
-          </button>
-          <a
-            href="/downloads/berserker-v0.7.0-rust.tar.gz"
-            download="berserker-v0.7.0-rust.tar.gz"
-            className="px-2.5 py-1 rounded bg-orange-900/60 hover:bg-orange-800 text-orange-200 border border-orange-700/80 transition text-xs font-bold inline-flex items-center gap-1"
-          >
-            📦 Download Rust Crate
-          </a>
-          <button
-            onClick={() => handleSend('go movetime 3000')}
+            onClick={() => handleSend('go movetime 2000')}
             className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 transition"
           >
-            go movetime 3000
+            go movetime 2000
           </button>
           {isSearching && (
             <button

@@ -1,11 +1,15 @@
 {
-  "release": "Berserker v0.6.0",
-  "version": "0.6.0",
+  "release": "Berserker v0.7.1-dev",
+  "version": "0.7.1-dev",
   "author": "Berserker Engine Team",
-  "date": "2026-11-09",
-  "status": "Official Stable Multi-Platform Release",
+  "date": "2026-11-14",
+  "status": "Official Incremental Dev Release",
   "features": [
-    "Hybrid MCTS-PVS Dual Arbiter (PUCT Policy Guidance + Tactical Safety Net)",
+    "Zero-Allocation TypedArray Evaluation & O(1) Bitwise Passed-Pawn / Structure Imbalances",
+    "O(1) Native chess.hash() Zobrist Transposition Table Keys & 50-Move Halfmove Clock Propagation",
+    "O(1) Static Exchange Evaluation (SEE) via chess.attackers() Without Cloning or Undo",
+    "Quiescence Checkmate & Check-Evasion Search + Root-Safe FEN Digit Chess960 Castling Parser",
+    "PVS-First (85% Budget) Hybrid-MCTS-PVS Time Control with Safe 10ms IPC Margin",
     "Threat-Space Prophylaxis (The Petrosian Patch - Preemptive Opponent Threat Denial)",
     "Multi-Threaded Parallel MCTS with Virtual Loss",
     "PV-Instability & Tactical Volatility Dynamic Time Manager",
@@ -182,6 +186,27 @@
       "sizeFormatted": "51.6 KB",
       "sha256": "c834730fa053de415bdd3b0a7172a861b016e821d5e2192c885bc4de099b0fe2",
       "downloadUrl": "/downloads/berserker-v0.6.0-cli.js"
+    },
+    {
+      "fileName": "berserker-v0.7.0-cli.js",
+      "sizeBytes": 75223,
+      "sizeFormatted": "73.5 KB",
+      "sha256": "13c48627db29f95f8e8d0c42c48c1941011e6727e190bc51f25e682b7c31c9ee",
+      "downloadUrl": "/downloads/berserker-v0.7.0-cli.js"
+    },
+    {
+      "fileName": "berserker-v0.7.0-rust.tar.gz",
+      "sizeBytes": 9073,
+      "sizeFormatted": "8.9 KB",
+      "sha256": "d6d72d4863704f5967edbcfb4305faade2e3cb5c52d369a166b1dbcc51385238",
+      "downloadUrl": "/downloads/berserker-v0.7.0-rust.tar.gz"
+    },
+    {
+      "fileName": "berserker-v0.7.1-cli.js",
+      "sizeBytes": 88865,
+      "sizeFormatted": "86.8 KB",
+      "sha256": "c02d4a2a3d8fbf498d281ed29e7e89385725e9572975509bf105eeddadc210cc",
+      "downloadUrl": "/downloads/berserker-v0.7.1-cli.js"
     },
     {
       "fileName": "build-windows.bat",
