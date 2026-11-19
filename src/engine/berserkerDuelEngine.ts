@@ -188,6 +188,7 @@ export async function searchBerserkerDuelMove(
   let serverBestMoveUci = '';
   let serverBestMoveSan = '';
   let serverScoreCp = 0;
+  let serverMate: number | null = null;
   let serverDepth = depth;
   let serverNodes = 0;
   let serverNps = 0;
@@ -206,6 +207,7 @@ export async function searchBerserkerDuelMove(
         if (data && data.bestmove) {
           serverBestMoveUci = data.bestmove;
           serverScoreCp = data.scoreCp || 0;
+          serverMate = typeof data.mate === 'number' ? data.mate : null;
           serverDepth = data.depth || depth;
           serverNodes = data.nodes || 45000;
           serverNps = data.nps || 180000;
@@ -246,7 +248,7 @@ export async function searchBerserkerDuelMove(
   let moveReason: BerserkerDuelSearchResult['reason'] = 'tactical-pv';
   let prophylacticNote = 'Deep NNUE Principal Variation with late move reduction immunity.';
 
-  if (threats.hasMateThreat || threats.hasForkThreat) {
+  if (serverMate === null && (threats.hasMateThreat || threats.hasForkThreat)) {
     // If Stockfish has an aggressive tactical plan, check if the top move defuses it
     const testChess = new Chess(fen);
     try {
@@ -288,7 +290,7 @@ export async function searchBerserkerDuelMove(
     bestMoveUci: finalMoveUci,
     bestMoveSan: finalMoveSan,
     scoreCp: serverScoreCp || quad.centipawns,
-    mate: null,
+    mate: serverMate,
     depth: serverDepth,
     seldepth: serverDepth + 4,
     nodes: serverNodes,

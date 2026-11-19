@@ -39,6 +39,7 @@ export interface BerserkerEngineConfig {
 export interface UseBerserkerEngineReturn {
   isReady: boolean;
   isNnueReady: boolean;
+  nnueProgress: number | null;
   isSearching: boolean;
   searchInfo: BerserkerSearchInfo;
   bestMove: string | null;
@@ -108,6 +109,7 @@ export const useBerserkerEngine = (): UseBerserkerEngineReturn & {
 } => {
   const [isReady, setIsReady] = useState<boolean>(false);
   const [isNnueReady, setIsNnueReady] = useState<boolean>(false);
+  const [nnueProgress, setNnueProgress] = useState<number | null>(null);
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const [engineConfig, setEngineConfig] = useState<BerserkerEngineConfig>({
     threads: 1,
@@ -152,8 +154,16 @@ export const useBerserkerEngine = (): UseBerserkerEngineReturn & {
         return next.length > 200 ? next.slice(-200) : next;
       });
 
+      if (line.includes('NNUE download:')) {
+        const pctMatch = line.match(/NNUE download:\s*(\d+)%/);
+        if (pctMatch) {
+          setNnueProgress(parseInt(pctMatch[1], 10));
+        }
+      }
+
       if (line.includes('NNUE loaded:')) {
         setIsNnueReady(true);
+        setNnueProgress(100);
       }
 
       if (line === 'readyok') {
@@ -293,7 +303,7 @@ export const useBerserkerEngine = (): UseBerserkerEngineReturn & {
   }, [setOption]);
 
   const setHashSize = useCallback((mb: number) => {
-    const clamped = Math.max(16, Math.min(64, mb));
+    const clamped = Math.max(16, Math.min(2048, mb));
     setEngineConfig((prev) => ({ ...prev, hashMb: clamped }));
     setOption('Hash', clamped);
   }, [setOption]);
@@ -371,6 +381,7 @@ export const useBerserkerEngine = (): UseBerserkerEngineReturn & {
   return {
     isReady,
     isNnueReady,
+    nnueProgress,
     isSearching,
     searchInfo,
     bestMove,

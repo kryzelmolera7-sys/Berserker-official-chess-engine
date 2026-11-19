@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "build:wasm": "clang++ --target=wasm32 -std=c++20 -O3 -msimd128 -mbulk-memory -fno-exceptions -fno-rtti -nostdlib -Wall -Wextra -Wno-unused-parameter -Wl,--no-entry,--export-dynamic,--initial-memory=150994944,--max-memory=268435456 -Wl,-z,stack-size=1048576 -o public/berserker-engine.wasm src/engine/cpp/berserker.cpp",
+    "build:wasm": "clang++ --target=wasm32 -std=c++20 -O3 -msimd128 -mbulk-memory -fno-exceptions -fno-rtti -nostdlib -Wall -Wextra -Wno-unused-parameter -Wl,--no-entry,--export-dynamic,--initial-memory=268435456,--max-memory=536870912 -Wl,-z,stack-size=1048576 -o public/berserker-engine.wasm src/engine/cpp/berserker.cpp",
+    "build:native": "mkdir -p bin && g++ -O3 -std=c++20 -march=native -pthread -DBERSERKER_NATIVE -Wall -Wextra -Wno-unused-parameter -o bin/berserker-native src/engine/cpp/berserker.cpp",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

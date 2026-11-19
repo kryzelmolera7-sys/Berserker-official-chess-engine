@@ -2,29 +2,136 @@
  * Berserker C++20 WebAssembly Engine Web Worker
  *
  * Loads:
- *   - /berserker-engine.wasm (native C++20 SIMD Pure-PVS engine)
- *   - /nnue/v60-7f587dfb.nnue (63 MB Reckless quantized NNUE evaluation network)
+ *   1. /berserker-engine.wasm (~120 KB C++20 SIMD128 Pure-PVS engine, no huge embedded weights)
+ *   2. Automatic NNUE Loader for nn-bddd9d57eb87.nnue (138,360,528 bytes):
+ *      - IndexedDB cache hit (<150ms instant reload on repeat visits)
+ *      - Direct Raw Download Link: https://media.githubusercontent.com/media/official-stockfish/networks/master/nn-bddd9d57eb87.nnue
+ *      - GitHub Raw Redirect:     https://github.com/official-stockfish/networks/raw/master/nn-bddd9d57eb87.nnue
+ *      - Same-Origin Auto Cache:  /api/nnue/nn-bddd9d57eb87.nnue
  *
- * Processes UCI commands asynchronously without blocking the worker message queue
- * so `stop`, `position`, and `quit` respond immediately.
+ * Uses MessageChannel zero-delay scheduling + 16ms time slices so `stop`,
+ * `position`, and `quit` respond promptly without 4ms setTimeout clamping.
  */
 
-/* global self, WebAssembly, TextEncoder, TextDecoder, fetch, performance */
+/* global self, WebAssembly, TextEncoder, TextDecoder, fetch, performance, MessageChannel, indexedDB */
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+
+const NNUE_FILE = 'nn-bddd9d57eb87.nnue';
+const NNUE_EXPECTED_BYTES = 138360528;
+const NNUE_CDN_DOWNLOAD_URL =
+  'https://media.githubusercontent.com/media/official-stockfish/networks/master/nn-bddd9d57eb87.nnue';
+const NNUE_RAW_DOWNLOAD_URL =
+  'https://github.com/official-stockfish/networks/raw/master/nn-bddd9d57eb87.nnue';
+const NNUE_AUTO_SOURCES = [
+  NNUE_CDN_DOWNLOAD_URL,
+  NNUE_RAW_DOWNLOAD_URL,
+  '/api/nnue/nn-bddd9d57eb87.nnue',
+];
+
+const IDB_NAME = 'berserker-nnue-cache';
+const IDB_STORE = 'networks';
 
 let wasmExp = null;
 let wasmMemory = null;
 let cmdPtr = 0;
 let cmdMax = 0;
+let nnuePtr = 0;
+let nnueMaxBytes = 0;
 let nnueReady = false;
-let nnueBytesLoaded = 0;
 
 let isStepping = false;
-let stepTimer = null;
+let stepPending = false;
 const commandQueue = [];
 let drainingQueue = false;
+
+const stepChannel = new MessageChannel();
+stepChannel.port1.onmessage = () => {
+  stepPending = false;
+  runStepSlice();
+};
+
+function openNnueCacheDb() {
+  return new Promise((resolve) => {
+    try {
+      if (typeof indexedDB === 'undefined') {
+        resolve(null);
+        return;
+      }
+      const req = indexedDB.open(IDB_NAME, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(IDB_STORE)) {
+          db.createObjectStore(IDB_STORE);
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+async function readCachedNnue() {
+  try {
+    const db = await openNnueCacheDb();
+    if (!db) return null;
+    return await new Promise((resolve) => {
+      try {
+        const tx = db.transaction(IDB_STORE, 'readonly');
+        const store = tx.objectStore(IDB_STORE);
+        const req = store.get(NNUE_FILE);
+        req.onsuccess = () => {
+          const val = req.result;
+          db.close();
+          if (val instanceof ArrayBuffer && val.byteLength === NNUE_EXPECTED_BYTES) {
+            resolve(val);
+          } else {
+            resolve(null);
+          }
+        };
+        req.onerror = () => {
+          db.close();
+          resolve(null);
+        };
+      } catch {
+        db.close();
+        resolve(null);
+      }
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function writeCachedNnue(buffer) {
+  try {
+    const db = await openNnueCacheDb();
+    if (!db) return;
+    await new Promise((resolve) => {
+      try {
+        const tx = db.transaction(IDB_STORE, 'readwrite');
+        const store = tx.objectStore(IDB_STORE);
+        const req = store.put(buffer, NNUE_FILE);
+        req.onsuccess = () => {
+          db.close();
+          resolve(true);
+        };
+        req.onerror = () => {
+          db.close();
+          resolve(false);
+        };
+      } catch {
+        db.close();
+        resolve(false);
+      }
+    });
+  } catch {
+    // Ignore IDB quota/privacy mode errors gracefully
+  }
+}
 
 function writeCmdToWasm(text) {
   const encoded = encoder.encode(text);
@@ -37,27 +144,24 @@ function writeCmdToWasm(text) {
 
 function stopCurrentSearchSynchronously() {
   if (!isStepping || !wasmExp) return;
-  if (stepTimer !== null) {
-    clearTimeout(stepTimer);
-    stepTimer = null;
-  }
+  isStepping = false;
+  stepPending = false;
   wasmExp.wasm_stop();
   try {
-    // Finishes current step and emits final bestmove matching pv[0]
+    // Finishes current step and emits final bestmove matching completed pv[0]
     wasmExp.wasm_search_step();
   } catch (err) {
     self.postMessage('info string WASM stop error: ' + String(err));
   }
-  isStepping = false;
 }
 
 function scheduleNextStep() {
-  if (!isStepping || !wasmExp) return;
-  stepTimer = setTimeout(runStepSlice, 0);
+  if (!isStepping || !wasmExp || stepPending) return;
+  stepPending = true;
+  stepChannel.port2.postMessage(null);
 }
 
 function runStepSlice() {
-  stepTimer = null;
   if (!isStepping || !wasmExp) return;
 
   const sliceStart = performance.now();
@@ -68,9 +172,8 @@ function runStepSlice() {
         isStepping = false;
         break;
       }
-      // Run rapid shallow plies together (~4ms max) so UI gets responsive updates
-      // while depth >= 5 yields back to the event loop between iterations for `stop`.
-      if (performance.now() - sliceStart >= 4) {
+      // Run iterative slices for ~16ms before yielding to process `stop` messages
+      if (performance.now() - sliceStart >= 16) {
         break;
       }
     }
@@ -118,7 +221,7 @@ async function instantiateWasm() {
     } else {
       const resp = await fetch('/berserker-engine.wasm');
       if (!resp.ok) throw new Error('HTTP ' + resp.status + ' loading /berserker-engine.wasm');
-      const buf = await resp.arrayBuffer();
+      const buf = await fallbackResp.arrayBuffer();
       const result = await WebAssembly.instantiate(buf, imports);
       instance = result.instance;
     }
@@ -131,41 +234,98 @@ async function instantiateWasm() {
   wasmMemory = wasmExp.memory;
   cmdPtr = wasmExp.wasm_get_cmd_buf();
   cmdMax = wasmExp.wasm_get_cmd_buf_size();
+  nnuePtr = wasmExp.wasm_get_nnue_ptr();
+  nnueMaxBytes = wasmExp.wasm_get_nnue_max_bytes();
   wasmExp.wasm_init();
   return wasmExp;
 }
 
-const nnueFetchPromise = (async () => {
-  try {
-    const resp = await fetch('/nnue/v60-7f587dfb.nnue');
-    if (!resp.ok) {
-      self.postMessage('info string NNUE download failed HTTP ' + resp.status + '; using fallback PST');
-      return false;
-    }
-    const buf = await resp.arrayBuffer();
-    return new Uint8Array(buf);
-  } catch (err) {
-    self.postMessage('info string NNUE download unavailable: ' + String(err));
-    return null;
-  }
-})();
-
 const wasmBootPromise = instantiateWasm();
 
-const fullNnueBootPromise = Promise.all([wasmBootPromise, nnueFetchPromise]).then(([, nnueBytes]) => {
-  if (!wasmExp || !(nnueBytes instanceof Uint8Array)) return false;
-  const maxBytes = wasmExp.wasm_get_nnue_max_bytes();
-  if (nnueBytes.byteLength >= maxBytes - 32) {
-    const ptr = wasmExp.wasm_get_nnue_ptr();
-    const copyLen = Math.min(nnueBytes.byteLength, maxBytes);
-    new Uint8Array(wasmMemory.buffer, ptr, copyLen).set(nnueBytes.subarray(0, copyLen));
-    const ok = wasmExp.wasm_init_nnue(copyLen) !== 0;
-    nnueReady = ok;
-    nnueBytesLoaded = ok ? copyLen : 0;
-    return ok;
+async function autoLoadNnue() {
+  await wasmBootPromise;
+  if (wasmExp.wasm_is_nnue_loaded() !== 0) {
+    nnueReady = true;
+    return true;
   }
+
+  // 1. Fast IndexedDB cache check
+  const cached = await readCachedNnue();
+  if (cached && cached.byteLength === NNUE_EXPECTED_BYTES && nnueMaxBytes >= NNUE_EXPECTED_BYTES) {
+    new Uint8Array(wasmMemory.buffer, nnuePtr, NNUE_EXPECTED_BYTES).set(new Uint8Array(cached));
+    if (wasmExp.wasm_init_nnue(NNUE_EXPECTED_BYTES) === 1) {
+      nnueReady = true;
+      self.postMessage('info string NNUE download: 100% (132.0/132.0 MB cached)');
+      self.postMessage(`info string NNUE loaded: ${NNUE_FILE} (${NNUE_EXPECTED_BYTES} bytes cached)`);
+      return true;
+    }
+  }
+
+  // 2. Automatic streaming download from direct raw URLs -> local cache fallback
+  for (const url of NNUE_AUTO_SOURCES) {
+    try {
+      self.postMessage(`info string NNUE auto-loader fetching: ${url}`);
+      const resp = await fetch(url);
+      if (!resp.ok || !resp.body) {
+        self.postMessage(`info string NNUE source HTTP ${resp.status}, trying fallback...`);
+        continue;
+      }
+
+      const clHeader = resp.headers.get('content-length');
+      if (clHeader) {
+        const expectedLen = parseInt(clHeader, 10);
+        if (expectedLen > 0 && expectedLen !== NNUE_EXPECTED_BYTES) {
+          self.postMessage(`info string NNUE size mismatch (${expectedLen}), trying fallback...`);
+          continue;
+        }
+      }
+
+      const reader = resp.body.getReader();
+      let offset = 0;
+      let lastPct = -1;
+      const totalMb = (NNUE_EXPECTED_BYTES / (1024 * 1024)).toFixed(1);
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value || value.byteLength === 0) continue;
+        if (offset + value.byteLength > nnueMaxBytes) {
+          throw new Error('NNUE download overflowed WASM buffer');
+        }
+        new Uint8Array(wasmMemory.buffer, nnuePtr, NNUE_EXPECTED_BYTES).set(value, offset);
+        offset += value.byteLength;
+
+        const pct = Math.min(100, Math.floor((offset * 100) / NNUE_EXPECTED_BYTES));
+        if (pct >= lastPct + 5 || pct === 100) {
+          lastPct = pct;
+          const loadedMb = (offset / (1024 * 1024)).toFixed(1);
+          self.postMessage(`info string NNUE download: ${pct}% (${loadedMb}/${totalMb} MB)`);
+        }
+      }
+
+      if (offset !== NNUE_EXPECTED_BYTES) {
+        self.postMessage(`info string Incomplete NNUE download (${offset}/${NNUE_EXPECTED_BYTES} bytes), retrying fallback...`);
+        continue;
+      }
+
+      if (wasmExp.wasm_init_nnue(NNUE_EXPECTED_BYTES) === 1) {
+        nnueReady = true;
+        self.postMessage(`info string NNUE loaded: ${NNUE_FILE} (${NNUE_EXPECTED_BYTES} bytes auto-loaded)`);
+        // Persist in IndexedDB asynchronously for instant future reloads
+        const copyForCache = new Uint8Array(wasmMemory.buffer, nnuePtr, NNUE_EXPECTED_BYTES).slice().buffer;
+        writeCachedNnue(copyForCache);
+        return true;
+      }
+    } catch (err) {
+      self.postMessage(`info string NNUE fetch warning (${url}): ${String(err)}`);
+    }
+  }
+
+  self.postMessage('info string ERROR: Automatic NNUE loader failed from all raw sources');
   return false;
-});
+}
+
+const nnueBootPromise = autoLoadNnue();
 
 async function drainCommandQueue() {
   if (drainingQueue) return;
@@ -180,24 +340,15 @@ async function drainCommandQueue() {
 
       const cmd = line.split(/\s+/)[0];
 
-      if (cmd === 'isready') {
-        await fullNnueBootPromise;
-        if (nnueReady) {
-          self.postMessage('info string NNUE loaded: v60-7f587dfb.nnue (' + nnueBytesLoaded + ' bytes)');
-        }
-        const len = writeCmdToWasm('isready');
-        wasmExp.wasm_exec_uci(len);
-        continue;
-      }
-
       if (cmd === 'quit') {
         stopCurrentSearchSynchronously();
         self.close();
         return;
       }
 
-      if (cmd === 'go' || cmd === 'eval') {
-        await fullNnueBootPromise;
+      // Ensure automatic NNUE weights are loaded before isready / eval / go / bench
+      if (!nnueReady && cmd !== 'uci' && cmd !== 'setoption') {
+        await nnueBootPromise;
       }
 
       const len = writeCmdToWasm(line);

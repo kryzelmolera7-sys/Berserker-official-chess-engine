@@ -5,8 +5,8 @@ import {
   initRecklessNnue,
   RecklessEvaluator,
   evaluateRecklessNnueFen,
-  RECKLESS_NET_NAME,
 } from '../src/engine/recklessNnue';
+import { ensureNodeNnueCachedAsync, getNodeWasmEngineSync } from '../src/engine/wasmEngine';
 
 function perft(board: FastBoard, depth: number, ply = 0): number {
   if (depth === 0) return 1;
@@ -68,31 +68,46 @@ test('FastBoard full iterative SEE handles defended pieces and X-ray batteries',
   assert.equal(seeBoard2.staticExchangeEvaluation(badCap), -850);
 });
 
-test(`Reckless ${RECKLESS_NET_NAME} loads actual binary weights and evaluates positions accurately`, async () => {
+test(`Embedded / Reckless NNUE loads actual binary weights and evaluates positions accurately`, async () => {
   const params = await initRecklessNnue();
-  assert.ok(params, 'Expected Reckless NNUE binary file to load cleanly');
+  if (params) {
+    const startEval = evaluateRecklessNnueFen('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
+    assert.ok(startEval !== null && startEval > 5 && startEval < 55, `Unexpected startpos eval: ${startEval}`);
 
-  const startEval = evaluateRecklessNnueFen('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
-  assert.ok(startEval !== null && startEval > 5 && startEval < 55, `Unexpected startpos eval: ${startEval}`);
+    const upQueen = evaluateRecklessNnueFen('rnb1kbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
+    assert.ok(upQueen !== null && upQueen > 350, `Expected up-Queen eval > 350 cp, got ${upQueen}`);
 
-  // White up a Queen should evaluate strongly positive
-  const upQueen = evaluateRecklessNnueFen('rnb1kbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
-  assert.ok(upQueen !== null && upQueen > 350, `Expected up-Queen eval > 350 cp, got ${upQueen}`);
+    const downQueen = evaluateRecklessNnueFen('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNB1KBNR w KQkq - 0 1');
+    assert.ok(downQueen !== null && downQueen < -250, `Expected down-Queen eval < -250 cp, got ${downQueen}`);
+    return;
+  }
 
-  // White down a Queen should evaluate strongly negative
-  const downQueen = evaluateRecklessNnueFen('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNB1KBNR w KQkq - 0 1');
-  assert.ok(downQueen !== null && downQueen < -250, `Expected down-Queen eval < -250 cp, got ${downQueen}`);
+  // External 63 MB file was superseded by auto-loaded 138.4 MB nn-bddd9d57eb87.nnue inside WASM
+  await ensureNodeNnueCachedAsync();
+  const wasm = getNodeWasmEngineSync();
+  assert.ok(wasm && wasm.isNnueLoaded(), 'Expected auto-loaded 138.4 MB NNUE in WASM');
+  assert.equal(wasm.evaluateFen('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'), 20);
+  assert.ok(wasm.evaluateFen('rnb1kbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1') > 1000);
+  assert.ok(wasm.evaluateFen('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNB1KBNR w KQkq - 0 1') < -700);
 });
 
-test('Reckless incremental accumulator matches full refresh bit-for-bit across tactical trees', async () => {
+test('NNUE incremental accumulator matches full refresh bit-for-bit across tactical trees', async () => {
   const params = await initRecklessNnue();
-  assert.ok(params);
-
   const fens = [
     'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
     'r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1',
     'r1bqkb1r/pppp1ppp/2n5/4p3/2B1n3/5Q2/PPPP1PPP/RNB1K1NR w KQkq - 0 5',
   ];
+
+  if (!params) {
+    await ensureNodeNnueCachedAsync();
+    const wasm = getNodeWasmEngineSync();
+    assert.ok(wasm && wasm.isNnueLoaded());
+    for (const fen of fens) {
+      assert.equal(wasm.verifyIncrementalParity(fen, 2), 0, `Incremental NNUE mismatch on ${fen}`);
+    }
+    return;
+  }
 
   const board = new FastBoard();
   const evaluator = new RecklessEvaluator(params);

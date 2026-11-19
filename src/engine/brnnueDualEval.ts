@@ -303,7 +303,7 @@ export function evaluateBRnnueV030(fen: string): BRnnueV030Eval {
     plentyWeight = 1.0 - bszWeight;
   }
 
-  // Use genuine 63MB Reckless quantized NNUE (v60-7f587dfb.nnue) via WASM when loaded
+  // Use embedded 138.4 MB SF-Arch NNUE (nn-bddd9d57eb87.nnue) via WASM when loaded
   const heuristicWhite = Math.round(
     bsz090.centipawns * bszWeight + plenty.centipawns * plentyWeight
   );

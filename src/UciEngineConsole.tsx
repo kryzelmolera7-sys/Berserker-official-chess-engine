@@ -16,11 +16,13 @@ import {
 import { useBerserkerEngine } from './useBerserkerEngine';
 import { evaluateAuraNnue } from './engine/auraNnue';
 import { evaluateBerserker10Nnue } from './engine/brnnueDualEval';
+import { NNUE_RAW_DOWNLOAD_URL } from './engine/wasmEngine';
 
 export const UciEngineConsole: React.FC = () => {
   const {
     isReady,
     isNnueReady,
+    nnueProgress,
     isSearching,
     searchInfo,
     bestMove,
@@ -35,8 +37,9 @@ export const UciEngineConsole: React.FC = () => {
   const [activeEvalMode, setActiveEvalMode] = useState<'brnnue-v030' | 'berserker-1.0-nnue' | 'aura-nnue'>('brnnue-v030');
   const [customFen, setCustomFen] = useState<string>('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
   const [localLogs, setLocalLogs] = useState<string[]>([
-    'Berserker v0.6.0 C++20 WebAssembly Engine Initializing...',
-    'Neural Network: Reckless 63 MB Quantized NNUE (v60-7f587dfb.nnue) • Pure-PVS Alpha-Beta',
+    'Berserker v0.7.0 C++20 WebAssembly Engine Initializing...',
+    'Neural Network: Auto-Loaded SF-Arch NNUE (nn-bddd9d57eb87.nnue • 138.4 MB) • IndexedDB + GitHub Raw Stream',
+    `Raw NNUE URL: ${NNUE_RAW_DOWNLOAD_URL}`,
     'Type UCI commands below or click quick-actions.',
     '--------------------------------------------------------------------------------'
   ]);
@@ -67,7 +70,7 @@ export const UciEngineConsole: React.FC = () => {
           `[AURA-NNUE] Eval: ${auraEval.centipawns > 0 ? '+' : ''}${(auraEval.centipawns / 100).toFixed(2)} (${auraEval.centipawns} cp) | Expert: ${auraEval.activeExpert}`
         ]);
       }
-      // Always dispatch to the WASM worker so the genuine v60-7f587dfb.nnue net evaluates the worker's current position
+      // Always dispatch to the WASM worker so the embedded nn-bddd9d57eb87.nnue net evaluates the worker's current position
       sendCommand('eval');
       if (!cmdToSend) setInputCmd('');
       return;
@@ -93,13 +96,19 @@ export const UciEngineConsole: React.FC = () => {
         <div>
           <div className="flex items-center gap-2 flex-wrap">
             <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40">
-              Berserker v0.6.0-wasm
+              Berserker v0.7.0-wasm
             </span>
             <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-              {isNnueReady ? 'NNUE Active (63MB SIMD)' : isReady ? 'WASM Ready' : 'Loading WASM + NNUE...'}
+              {isNnueReady
+                ? 'NNUE Active (138.4MB SIMD)'
+                : nnueProgress !== null
+                ? `Auto-Loading NNUE (${nnueProgress}%)...`
+                : isReady
+                ? 'WASM Ready'
+                : 'Auto-Loading WASM + NNUE...'}
             </span>
             <span className="text-xs text-slate-400 font-mono">
-              Status: {isReady ? 'Engine Ready (UCI)' : 'Booting...'}
+              Status: {isReady ? 'Engine Ready (UCI)' : 'Auto-Loading Network...'}
             </span>
           </div>
           <h2 className="text-lg font-bold text-white mt-1 flex items-center gap-2">
@@ -107,7 +116,14 @@ export const UciEngineConsole: React.FC = () => {
             Standalone UCI Engine Terminal
           </h2>
           <p className="text-xs text-slate-400">
-            Raw UCI console interface • Communicating directly with C++20 WASM + v60-7f587dfb.nnue worker
+            Raw UCI console • Auto-loads nn-bddd9d57eb87.nnue (138.4 MB) via{' '}
+            <a
+              href={NNUE_RAW_DOWNLOAD_URL}
+              download="nn-bddd9d57eb87.nnue"
+              className="text-purple-300 underline hover:text-purple-200"
+            >
+              GitHub Raw Link
+            </a>
           </p>
         </div>
 
@@ -118,7 +134,7 @@ export const UciEngineConsole: React.FC = () => {
             onClick={() => {
               setActiveEvalMode('brnnue-v030');
               setOption('EvalMode', 'brnnue-v030');
-              setLocalLogs((p) => [...p, '[UCI] Evaluator: Reckless Quantized NNUE (v60-7f587dfb.nnue WASM SIMD)']);
+              setLocalLogs((p) => [...p, '[UCI] Evaluator: Auto-Loaded SF-Arch NNUE (nn-bddd9d57eb87.nnue WASM SIMD)']);
             }}
             className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold transition flex items-center gap-1.5 ${
               activeEvalMode === 'brnnue-v030'
@@ -127,7 +143,7 @@ export const UciEngineConsole: React.FC = () => {
             }`}
           >
             <Cpu className="w-3.5 h-3.5" />
-            NNUE (63MB)
+            NNUE (138.4MB)
           </button>
           <button
             onClick={() => {
@@ -209,7 +225,7 @@ export const UciEngineConsole: React.FC = () => {
           {allLogs.map((logLine, idx) => {
             const isUserCmd = logLine.startsWith('>');
             const isBestMove = logLine.startsWith('bestmove');
-            const isNnueInfo = logLine.startsWith('info string NNUE') || logLine.includes('v60-7f587dfb.nnue');
+            const isNnueInfo = logLine.startsWith('info string NNUE') || logLine.includes('nn-bddd9d57eb87.nnue');
             const isInfo = logLine.startsWith('info');
             const isReady = logLine.includes('readyok') || logLine.includes('uciok');
             const isEval = isNnueInfo || logLine.includes('[Berserker') || logLine.includes('[AURA-NNUE]');

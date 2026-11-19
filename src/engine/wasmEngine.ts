@@ -1,9 +1,24 @@
 /**
  * Berserker C++20 WASM Engine Bridge (Node.js & Browser)
  *
- * Instantiates public/berserker-engine.wasm + public/nnue/v60-7f587dfb.nnue
- * with zero static Node-only imports so it is completely browser-bundle safe.
+ * Instantiates lightweight public/berserker-engine.wasm (<200 KB) and
+ * automatically loads the 138,360,528-byte nn-bddd9d57eb87.nnue evaluation
+ * network from its direct raw download URL / local runtime cache
+ * (`storage/nn-cache/nn-bddd9d57eb87.nnue`).
  */
+
+export const NNUE_FILE = 'nn-bddd9d57eb87.nnue';
+export const NNUE_BYTES = 138360528;
+export const NNUE_RAW_DOWNLOAD_URL =
+  'https://github.com/official-stockfish/networks/raw/master/nn-bddd9d57eb87.nnue';
+export const NNUE_CDN_DOWNLOAD_URL =
+  'https://media.githubusercontent.com/media/official-stockfish/networks/master/nn-bddd9d57eb87.nnue';
+export const NNUE_MIRROR_DOWNLOAD_URL =
+  'https://tests.stockfishchess.org/api/nn/nn-bddd9d57eb87.nnue';
+
+// Backward-compatible aliases for existing imports/tests
+export const EMBEDDED_NNUE_FILE = NNUE_FILE;
+export const EMBEDDED_NNUE_BYTES = NNUE_BYTES;
 
 export interface WasmSearchResult {
   bestMoveUci: string;
@@ -24,6 +39,7 @@ export interface WasmEngineInstance {
   setPosition(fenOrStartpos: string, moves?: string[]): void;
   evaluateFen(fen: string): number;
   evaluateRawFen(fen: string): number;
+  verifyIncrementalParity(fen: string, depth?: number): number;
   perft(fen: string, depth: number): number;
   search(fenOrStartpos: string, maxDepth?: number, timeLimitMs?: number, moves?: string[]): WasmSearchResult;
   execUci(cmd: string): { isSearching: boolean; lines: string[] };
@@ -46,6 +62,7 @@ interface RawExports {
   wasm_stop(): void;
   wasm_evaluate_fen(len: number): number;
   wasm_evaluate_raw_fen(len: number): number;
+  wasm_verify_incremental_parity(len: number, depth: number): number;
   wasm_perft(depth: number): bigint;
   wasm_exec_uci(len: number): number;
   wasm_search_step(): number;
@@ -61,7 +78,7 @@ const textDecoder = new TextDecoder();
 
 function createWrapper(
   wasmModule: WebAssembly.Module,
-  nnueBytes: Uint8Array | null
+  nnueBytes: Uint8Array | null = null
 ): WasmEngineInstance {
   let activeLines: string[] = [];
   let memoryRef: WebAssembly.Memory | null = null;
@@ -83,12 +100,13 @@ function createWrapper(
   memoryRef = exp.memory;
   exp.wasm_init();
 
-  if (nnueBytes && nnueBytes.byteLength >= exp.wasm_get_nnue_max_bytes() - 32) {
+  if (nnueBytes && nnueBytes.byteLength === NNUE_BYTES) {
     const ptr = exp.wasm_get_nnue_ptr();
     const maxBytes = exp.wasm_get_nnue_max_bytes();
-    const copyLen = Math.min(nnueBytes.byteLength, maxBytes);
-    new Uint8Array(exp.memory.buffer, ptr, copyLen).set(nnueBytes.subarray(0, copyLen));
-    exp.wasm_init_nnue(copyLen);
+    if (maxBytes >= NNUE_BYTES) {
+      new Uint8Array(exp.memory.buffer, ptr, NNUE_BYTES).set(nnueBytes);
+      exp.wasm_init_nnue(NNUE_BYTES);
+    }
   }
 
   const cmdPtr = exp.wasm_get_cmd_buf();
@@ -141,6 +159,10 @@ function createWrapper(
     evaluateRawFen(fen: string): number {
       const len = writeCmd(fen);
       return exp.wasm_evaluate_raw_fen(len);
+    },
+    verifyIncrementalParity(fen: string, depth = 2): number {
+      const len = writeCmd(fen);
+      return exp.wasm_verify_incremental_parity(len, depth);
     },
     perft(fen: string, depth: number): number {
       setPosition(fen);
@@ -250,6 +272,76 @@ let cachedNodeEngine: WasmEngineInstance | null = null;
 let cachedAsyncEngine: WasmEngineInstance | null = null;
 let asyncInitPromise: Promise<WasmEngineInstance | null> | null = null;
 
+function getNodeModules() {
+  const proc =
+    typeof process !== 'undefined'
+      ? (process as unknown as {
+          getBuiltinModule?: (id: string) => unknown;
+          cwd?: () => string;
+        })
+      : null;
+  if (!proc || typeof proc.getBuiltinModule !== 'function') return null;
+
+  const fs = proc.getBuiltinModule('node:fs') as {
+    existsSync: (p: string) => boolean;
+    mkdirSync: (p: string, opts?: { recursive?: boolean }) => void;
+    readFileSync: (p: string) => Uint8Array;
+    writeFileSync: (p: string, data: Uint8Array) => void;
+    renameSync: (oldP: string, newP: string) => void;
+    statSync: (p: string) => { size: number };
+  };
+  const path = proc.getBuiltinModule('node:path') as {
+    resolve: (...parts: string[]) => string;
+    dirname: (p: string) => string;
+  };
+  if (!fs || !path) return null;
+  const cwd = typeof proc.cwd === 'function' ? proc.cwd() : '.';
+  return { fs, path, cwd };
+}
+
+function readNodeCachedNnueSync(nm: NonNullable<ReturnType<typeof getNodeModules>>): Uint8Array | null {
+  const nnueCandidates = [
+    nm.path.resolve(nm.cwd, 'storage/nn-cache', NNUE_FILE),
+    nm.path.resolve(nm.cwd, NNUE_FILE),
+    nm.path.resolve(nm.cwd, 'public/nnue', NNUE_FILE),
+  ];
+  for (const c of nnueCandidates) {
+    if (nm.fs.existsSync(c)) {
+      const stat = nm.fs.statSync(c);
+      if (stat.size === NNUE_BYTES) {
+        return nm.fs.readFileSync(c);
+      }
+    }
+  }
+  return null;
+}
+
+export async function ensureNodeNnueCachedAsync(): Promise<Uint8Array | null> {
+  const nm = getNodeModules();
+  if (!nm) return null;
+  const existing = readNodeCachedNnueSync(nm);
+  if (existing) return existing;
+
+  const targetPath = nm.path.resolve(nm.cwd, 'storage/nn-cache', NNUE_FILE);
+  nm.fs.mkdirSync(nm.path.dirname(targetPath), { recursive: true });
+
+  for (const url of [NNUE_CDN_DOWNLOAD_URL, NNUE_RAW_DOWNLOAD_URL, NNUE_MIRROR_DOWNLOAD_URL]) {
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) continue;
+      const buf = new Uint8Array(await resp.arrayBuffer());
+      if (buf.byteLength !== NNUE_BYTES) continue;
+      const tmp = `${targetPath}.tmp.${Date.now()}`;
+      nm.fs.writeFileSync(tmp, buf);
+      nm.fs.renameSync(tmp, targetPath);
+      return buf;
+    } catch {
+      // try next mirror
+    }
+  }
+  return null;
+}
+
 /**
  * Returns the already-instantiated WASM+NNUE engine if available in either Node or Browser.
  */
@@ -258,54 +350,29 @@ export function getCachedWasmEngine(): WasmEngineInstance | null {
 }
 
 /**
- * Synchronous Node.js WASM + NNUE loader (safe in browser bundles via process.getBuiltinModule).
+ * Synchronous Node.js WASM loader (loads runtime NNUE from storage/nn-cache when cached).
  */
 export function getNodeWasmEngineSync(): WasmEngineInstance | null {
   if (cachedNodeEngine) return cachedNodeEngine;
   try {
-    const proc =
-      typeof process !== 'undefined'
-        ? (process as unknown as {
-            getBuiltinModule?: (id: string) => unknown;
-            cwd?: () => string;
-          })
-        : null;
-    if (!proc || typeof proc.getBuiltinModule !== 'function') return null;
+    const nm = getNodeModules();
+    if (!nm) return null;
 
-    const fs = proc.getBuiltinModule('node:fs') as {
-      existsSync: (p: string) => boolean;
-      readFileSync: (p: string) => Uint8Array;
-    };
-    const path = proc.getBuiltinModule('node:path') as {
-      resolve: (...parts: string[]) => string;
-    };
-    if (!fs || !path) return null;
-
-    const cwd = typeof proc.cwd === 'function' ? proc.cwd() : '.';
     const wasmCandidates = [
-      path.resolve(cwd, 'public/berserker-engine.wasm'),
-      path.resolve(cwd, 'berserker-engine.wasm'),
+      nm.path.resolve(nm.cwd, 'public/berserker-engine.wasm'),
+      nm.path.resolve(nm.cwd, 'berserker-engine.wasm'),
     ];
     let wasmBytes: Uint8Array | null = null;
     for (const c of wasmCandidates) {
-      if (fs.existsSync(c)) {
-        wasmBytes = fs.readFileSync(c);
+      if (nm.fs.existsSync(c)) {
+        wasmBytes = nm.fs.readFileSync(c);
         break;
       }
     }
     if (!wasmBytes) return null;
 
-    const nnueCandidates = [
-      path.resolve(cwd, 'public/nnue/v60-7f587dfb.nnue'),
-      path.resolve(cwd, 'nnue/v60-7f587dfb.nnue'),
-    ];
-    let nnueBytes: Uint8Array | null = null;
-    for (const c of nnueCandidates) {
-      if (fs.existsSync(c)) {
-        nnueBytes = fs.readFileSync(c);
-        break;
-      }
-    }
+    const nnueBytes = readNodeCachedNnueSync(nm);
+    if (!nnueBytes) return null;
 
     const wasmModule = new WebAssembly.Module(wasmBytes as BufferSource);
     cachedNodeEngine = createWrapper(wasmModule, nnueBytes);
@@ -318,29 +385,13 @@ export function getNodeWasmEngineSync(): WasmEngineInstance | null {
 
 export function createNodeWasmEngineFresh(): WasmEngineInstance | null {
   try {
-    const proc =
-      typeof process !== 'undefined'
-        ? (process as unknown as {
-            getBuiltinModule?: (id: string) => unknown;
-            cwd?: () => string;
-          })
-        : null;
-    if (!proc || typeof proc.getBuiltinModule !== 'function') return null;
-
-    const fs = proc.getBuiltinModule('node:fs') as {
-      existsSync: (p: string) => boolean;
-      readFileSync: (p: string) => Uint8Array;
-    };
-    const path = proc.getBuiltinModule('node:path') as {
-      resolve: (...parts: string[]) => string;
-    };
-    const cwd = typeof proc.cwd === 'function' ? proc.cwd() : '.';
-    const wasmPath = path.resolve(cwd, 'public/berserker-engine.wasm');
-    if (!fs.existsSync(wasmPath)) return null;
-    const wasmBytes = fs.readFileSync(wasmPath);
-
-    const nnuePath = path.resolve(cwd, 'public/nnue/v60-7f587dfb.nnue');
-    const nnueBytes = fs.existsSync(nnuePath) ? fs.readFileSync(nnuePath) : null;
+    const nm = getNodeModules();
+    if (!nm) return null;
+    const wasmPath = nm.path.resolve(nm.cwd, 'public/berserker-engine.wasm');
+    if (!nm.fs.existsSync(wasmPath)) return null;
+    const wasmBytes = nm.fs.readFileSync(wasmPath);
+    const nnueBytes = readNodeCachedNnueSync(nm);
+    if (!nnueBytes) return null;
 
     const wasmModule = new WebAssembly.Module(wasmBytes as BufferSource);
     return createWrapper(wasmModule, nnueBytes);
@@ -350,8 +401,7 @@ export function createNodeWasmEngineFresh(): WasmEngineInstance | null {
 }
 
 export async function initWasmEngine(
-  wasmUrl = '/berserker-engine.wasm',
-  nnueUrl = '/nnue/v60-7f587dfb.nnue'
+  wasmUrl = '/berserker-engine.wasm'
 ): Promise<WasmEngineInstance | null> {
   if (cachedAsyncEngine) return cachedAsyncEngine;
   const sync = getNodeWasmEngineSync();
@@ -360,17 +410,38 @@ export async function initWasmEngine(
   if (asyncInitPromise) return asyncInitPromise;
   asyncInitPromise = (async () => {
     try {
-      const [wasmRes, nnueRes] = await Promise.all([
-        fetch(wasmUrl),
-        fetch(nnueUrl).catch(() => null),
-      ]);
+      const nm = getNodeModules();
+      if (nm) {
+        const nnueBytes = await ensureNodeNnueCachedAsync();
+        const wasmPath = nm.path.resolve(nm.cwd, 'public/berserker-engine.wasm');
+        if (!nnueBytes || !nm.fs.existsSync(wasmPath)) return null;
+        const wasmModule = new WebAssembly.Module(nm.fs.readFileSync(wasmPath) as BufferSource);
+        cachedNodeEngine = createWrapper(wasmModule, nnueBytes);
+        cachedAsyncEngine = cachedNodeEngine;
+        return cachedAsyncEngine;
+      }
+
+      const wasmRes = await fetch(wasmUrl);
       if (!wasmRes.ok) return null;
       const wasmBuf = await wasmRes.arrayBuffer();
       const wasmModule = await WebAssembly.compile(wasmBuf);
+
       let nnueBytes: Uint8Array | null = null;
-      if (nnueRes && nnueRes.ok) {
-        nnueBytes = new Uint8Array(await nnueRes.arrayBuffer());
+      for (const url of [NNUE_CDN_DOWNLOAD_URL, NNUE_RAW_DOWNLOAD_URL, `/api/nnue/${NNUE_FILE}`]) {
+        try {
+          const nnueRes = await fetch(url);
+          if (!nnueRes.ok) continue;
+          const buf = new Uint8Array(await nnueRes.arrayBuffer());
+          if (buf.byteLength === NNUE_BYTES) {
+            nnueBytes = buf;
+            break;
+          }
+        } catch {
+          // try fallback
+        }
       }
+      if (!nnueBytes) return null;
+
       cachedAsyncEngine = createWrapper(wasmModule, nnueBytes);
       return cachedAsyncEngine;
     } catch {

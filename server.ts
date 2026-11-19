@@ -3,6 +3,7 @@ import { createServer as createViteServer } from 'vite';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -10,11 +11,362 @@ const __dirname = path.dirname(__filename);
 const PORT = 3000;
 const STORAGE_DIR = path.join(__dirname, 'storage');
 const STATE_FILE = path.join(STORAGE_DIR, 'berserker_24x7_pipeline.json');
+const NATIVE_BIN = path.join(__dirname, 'bin', 'berserker-native');
 
-// Ensure storage directory exists
+const EMBEDDED_NNUE_FILE = 'nn-bddd9d57eb87.nnue';
+const EMBEDDED_NNUE_BYTES = 138360528;
+const NNUE_RAW_DOWNLOAD_URL =
+  'https://github.com/official-stockfish/networks/raw/master/nn-bddd9d57eb87.nnue';
+const NNUE_CDN_DOWNLOAD_URL =
+  'https://media.githubusercontent.com/media/official-stockfish/networks/master/nn-bddd9d57eb87.nnue';
+const NNUE_MIRROR_DOWNLOAD_URL =
+  'https://tests.stockfishchess.org/api/nn/nn-bddd9d57eb87.nnue';
+const NNUE_CACHE_DIR = path.join(STORAGE_DIR, 'nn-cache');
+const NNUE_CACHE_PATH = path.join(NNUE_CACHE_DIR, EMBEDDED_NNUE_FILE);
+const NATIVE_THREADS = 4;
+const NATIVE_HASH_MB = 128;
+
+// Ensure storage directories exist
 if (!fs.existsSync(STORAGE_DIR)) {
   fs.mkdirSync(STORAGE_DIR, { recursive: true });
 }
+if (!fs.existsSync(NNUE_CACHE_DIR)) {
+  fs.mkdirSync(NNUE_CACHE_DIR, { recursive: true });
+}
+
+let nnueDownloading = false;
+let nnueDownloadProgressPct = 0;
+let nnueDownloadPromise: Promise<string> | null = null;
+
+async function ensureNnueCachedOnServer(): Promise<string> {
+  try {
+    if (fs.existsSync(NNUE_CACHE_PATH) && fs.statSync(NNUE_CACHE_PATH).size === EMBEDDED_NNUE_BYTES) {
+      nnueDownloadProgressPct = 100;
+      return NNUE_CACHE_PATH;
+    }
+  } catch {
+    // proceed to download
+  }
+
+  if (nnueDownloadPromise) return nnueDownloadPromise;
+
+  nnueDownloadPromise = (async () => {
+    nnueDownloading = true;
+    nnueDownloadProgressPct = 0;
+    const sources = [NNUE_CDN_DOWNLOAD_URL, NNUE_RAW_DOWNLOAD_URL, NNUE_MIRROR_DOWNLOAD_URL];
+
+    for (const url of sources) {
+      const tmpPath = `${NNUE_CACHE_PATH}.tmp.${Date.now()}`;
+      try {
+        console.log(`[Berserker Auto-Loader] Downloading ${EMBEDDED_NNUE_FILE} (138.4 MB) from ${url}`);
+        const resp = await fetch(url);
+        if (!resp.ok || !resp.body) continue;
+
+        const fileStream = fs.createWriteStream(tmpPath);
+        const reader = resp.body.getReader();
+        let received = 0;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (!value || value.byteLength === 0) continue;
+          received += value.byteLength;
+          nnueDownloadProgressPct = Math.min(99, Math.floor((received * 100) / EMBEDDED_NNUE_BYTES));
+          if (!fileStream.write(value)) {
+            await new Promise<void>((resolve) => fileStream.once('drain', resolve));
+          }
+        }
+        await new Promise<void>((resolve, reject) => {
+          fileStream.end(() => resolve());
+          fileStream.on('error', reject);
+        });
+
+        if (fs.existsSync(tmpPath) && fs.statSync(tmpPath).size === EMBEDDED_NNUE_BYTES) {
+          fs.renameSync(tmpPath, NNUE_CACHE_PATH);
+          nnueDownloadProgressPct = 100;
+          nnueDownloading = false;
+          console.log(`[Berserker Auto-Loader] Cached ${EMBEDDED_NNUE_FILE} (${EMBEDDED_NNUE_BYTES} bytes)`);
+          return NNUE_CACHE_PATH;
+        }
+      } catch (err) {
+        console.warn(`[Berserker Auto-Loader] Failed source ${url}:`, err);
+      } finally {
+        try {
+          if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+        } catch {
+          // ignore cleanup failure
+        }
+      }
+    }
+
+    nnueDownloading = false;
+    throw new Error(`Failed to auto-download ${EMBEDDED_NNUE_FILE} from all raw sources`);
+  })();
+
+  try {
+    return await nnueDownloadPromise;
+  } finally {
+    nnueDownloadPromise = null;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// PERSISTENT NATIVE C++20 LAZY SMP ENGINE BRIDGE
+// -----------------------------------------------------------------------------
+class NativeBerserkerHost {
+  private proc: ChildProcessWithoutNullStreams | null = null;
+  private ready = false;
+  private nnueLoaded = false;
+  private stdoutBuf = '';
+  private queue: Promise<void> = Promise.resolve();
+  private activeWaiter: {
+    donePrefix: string;
+    lines: string[];
+    resolve: (lines: string[]) => void;
+    reject: (err: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  } | null = null;
+
+  public boot(): Promise<void> {
+    return this.enqueue(async () => {
+      await this.ensureProcessLocked();
+    });
+  }
+
+  public getInfo() {
+    return {
+      nnueLoaded: this.nnueLoaded,
+      nnueFile: EMBEDDED_NNUE_FILE,
+      nnueBytes: EMBEDDED_NNUE_BYTES,
+      rawDownloadUrl: NNUE_RAW_DOWNLOAD_URL,
+      directCdnUrl: NNUE_CDN_DOWNLOAD_URL,
+      autoLoadEndpoint: `/api/nnue/${EMBEDDED_NNUE_FILE}`,
+      embedded: false,
+      autoLoaded: true,
+      downloading: nnueDownloading,
+      downloadProgressPct: this.nnueLoaded ? 100 : nnueDownloadProgressPct,
+      threads: NATIVE_THREADS,
+      hashMb: NATIVE_HASH_MB,
+      architecture: 'K32H3 + FullThreats + PP_3Wide (1024x32x32, 92/192 LayerStacks)',
+      ready: this.ready,
+    };
+  }
+
+  public async search(params: {
+    fen?: string;
+    moves?: string[];
+    depth?: number;
+    movetime?: number;
+  }): Promise<{
+    bestmove: string;
+    ponder: string | null;
+    scoreCp: number;
+    mate: number | null;
+    depth: number;
+    seldepth: number;
+    nodes: number;
+    nps: number;
+    pv: string;
+    timeMs: number;
+    nnueLoaded: boolean;
+  }> {
+    return this.enqueue(async () => {
+      await this.ensureProcessLocked();
+      if (!this.proc) throw new Error('Native Berserker binary unavailable');
+
+      const depth = Math.max(1, Math.min(40, Number(params.depth ?? 14)));
+      const movetime = Math.max(50, Math.min(30000, Number(params.movetime ?? 2200)));
+      const fen = typeof params.fen === 'string' && params.fen.trim().length > 0 ? params.fen.trim() : 'startpos';
+      const basePos = fen === 'startpos' ? 'position startpos' : `position fen ${fen}`;
+      const moves = Array.isArray(params.moves) && params.moves.length > 0 ? ` moves ${params.moves.join(' ')}` : '';
+      const posCmd = `${basePos}${moves}`;
+
+      const t0 = Date.now();
+      this.proc.stdin.write(`${posCmd}\n`);
+      const lines = await this.sendAndWaitLocked(`go depth ${depth} movetime ${movetime}`, 'bestmove ', movetime + 5000);
+      const elapsedMs = Math.max(1, Date.now() - t0);
+
+      let bestmove = '0000';
+      let ponder: string | null = null;
+      let scoreCp = 0;
+      let mate: number | null = null;
+      let reachedDepth = 0;
+      let seldepth = 0;
+      let nodes = 0;
+      let nps = 0;
+      let pv = '';
+
+      for (const line of lines) {
+        if (line.startsWith('info ') && line.includes(' depth ')) {
+          const dm = line.match(/\bdepth (\d+)/);
+          const sdm = line.match(/\bseldepth (\d+)/);
+          const cm = line.match(/\bscore cp (-?\d+)/);
+          const mm = line.match(/\bscore mate (-?\d+)/);
+          const nm = line.match(/\bnodes (\d+)/);
+          const npsm = line.match(/\bnps (\d+)/);
+          const pvIdx = line.indexOf(' pv ');
+          if (dm) reachedDepth = parseInt(dm[1], 10);
+          if (sdm) seldepth = parseInt(sdm[1], 10);
+          if (mm) {
+            mate = parseInt(mm[1], 10);
+            scoreCp = mate > 0 ? 25000 - mate * 10 : -25000 - mate * 10;
+          } else if (cm) {
+            mate = null;
+            scoreCp = parseInt(cm[1], 10);
+          }
+          if (nm) nodes = parseInt(nm[1], 10);
+          if (npsm) nps = parseInt(npsm[1], 10);
+          if (pvIdx !== -1) pv = line.slice(pvIdx + 4).trim();
+        } else if (line.startsWith('bestmove ')) {
+          const parts = line.split(/\s+/);
+          bestmove = parts[1] || '0000';
+          const pIdx = parts.indexOf('ponder');
+          if (pIdx !== -1 && parts[pIdx + 1]) ponder = parts[pIdx + 1];
+        }
+      }
+
+      if (!pv && bestmove !== '0000') pv = bestmove;
+
+      return {
+        bestmove,
+        ponder,
+        scoreCp,
+        mate,
+        depth: reachedDepth,
+        seldepth,
+        nodes,
+        nps: nps || Math.round((nodes * 1000) / elapsedMs),
+        pv,
+        timeMs: elapsedMs,
+        nnueLoaded: this.nnueLoaded,
+      };
+    });
+  }
+
+  public shutdown() {
+    if (this.proc) {
+      try {
+        this.proc.stdin.write('quit\n');
+      } catch {
+        // ignore
+      }
+      try {
+        this.proc.kill('SIGTERM');
+      } catch {
+        // ignore
+      }
+      this.proc = null;
+      this.ready = false;
+    }
+  }
+
+  private enqueue<T>(fn: () => Promise<T>): Promise<T> {
+    const next = this.queue.then(fn, fn);
+    this.queue = next.then(
+      () => undefined,
+      () => undefined
+    );
+    return next;
+  }
+
+  private async ensureProcessLocked(): Promise<void> {
+    if (this.proc && this.ready) return;
+    if (!fs.existsSync(NATIVE_BIN)) {
+      throw new Error(`Native binary missing at ${NATIVE_BIN}`);
+    }
+    const nnuePath = await ensureNnueCachedOnServer();
+    if (this.proc) {
+      try {
+        this.proc.kill('SIGKILL');
+      } catch {
+        // ignore
+      }
+      this.proc = null;
+      this.ready = false;
+    }
+
+    const child = spawn(NATIVE_BIN, [], { stdio: ['pipe', 'pipe', 'pipe'] });
+    this.proc = child;
+    this.stdoutBuf = '';
+    this.ready = false;
+
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => {
+      this.stdoutBuf += chunk;
+      let idx: number;
+      while ((idx = this.stdoutBuf.indexOf('\n')) !== -1) {
+        const line = this.stdoutBuf.slice(0, idx).replace(/\r$/, '');
+        this.stdoutBuf = this.stdoutBuf.slice(idx + 1);
+        this.handleStdoutLine(line);
+      }
+    });
+
+    child.stderr.on('data', (errData) => {
+      console.warn('[Berserker Native stderr]:', String(errData));
+    });
+
+    child.on('exit', () => {
+      if (this.proc === child) {
+        this.proc = null;
+        this.ready = false;
+      }
+      if (this.activeWaiter) {
+        clearTimeout(this.activeWaiter.timer);
+        const w = this.activeWaiter;
+        this.activeWaiter = null;
+        w.reject(new Error('Native Berserker process exited unexpectedly'));
+      }
+    });
+
+    await this.sendAndWaitLocked('uci', 'uciok', 5000);
+    child.stdin.write(`setoption name Threads value ${NATIVE_THREADS}\n`);
+    child.stdin.write(`setoption name Hash value ${NATIVE_HASH_MB}\n`);
+    child.stdin.write(`setoption name EvalFile value ${nnuePath}\n`);
+    const readyLines = await this.sendAndWaitLocked('isready', 'readyok', 15000);
+    this.nnueLoaded = readyLines.some((l) => l.includes('NNUE loaded:') && l.includes(EMBEDDED_NNUE_FILE));
+    this.ready = true;
+  }
+
+  private handleStdoutLine(line: string) {
+    if (line.includes('NNUE loaded:') && line.includes(EMBEDDED_NNUE_FILE)) {
+      this.nnueLoaded = true;
+    }
+    if (!this.activeWaiter) return;
+    this.activeWaiter.lines.push(line);
+    if (line.startsWith(this.activeWaiter.donePrefix)) {
+      const w = this.activeWaiter;
+      this.activeWaiter = null;
+      clearTimeout(w.timer);
+      w.resolve(w.lines);
+    }
+  }
+
+  private sendAndWaitLocked(cmd: string, donePrefix: string, timeoutMs: number): Promise<string[]> {
+    return new Promise((resolve, reject) => {
+      if (!this.proc) {
+        reject(new Error('Native Berserker process not running'));
+        return;
+      }
+      const lines: string[] = [];
+      const timer = setTimeout(() => {
+        if (this.activeWaiter && this.activeWaiter.resolve === resolve) {
+          this.activeWaiter = null;
+          try {
+            this.proc?.stdin.write('stop\n');
+          } catch {
+            // ignore
+          }
+          reject(new Error(`Timed out waiting for '${donePrefix}' after '${cmd}'`));
+        }
+      }, timeoutMs);
+
+      this.activeWaiter = { donePrefix, lines, resolve, reject, timer };
+      this.proc.stdin.write(`${cmd}\n`);
+    });
+  }
+}
+
+const nativeEngine = new NativeBerserkerHost();
 
 export interface PersistentPipelineState {
   daemonStatus: 'ONLINE_24_7_ACTIVE';
@@ -45,7 +397,6 @@ function loadState(): PersistentPipelineState {
     if (fs.existsSync(STATE_FILE)) {
       const raw = fs.readFileSync(STATE_FILE, 'utf-8');
       const parsed = JSON.parse(raw);
-      // Calculate offline catch-up based on elapsed time!
       const elapsedSeconds = Math.max(0, Math.floor((Date.now() - parsed.lastUpdatedTimestamp) / 1000));
       if (elapsedSeconds > 3) {
         const offlineGames = Math.floor(elapsedSeconds / 3);
@@ -99,7 +450,6 @@ function loadState(): PersistentPipelineState {
 
 let pipelineState = loadState();
 
-// Save state to disk
 function saveStateToDisk() {
   try {
     pipelineState.lastUpdatedTimestamp = Date.now();
@@ -109,37 +459,25 @@ function saveStateToDisk() {
   }
 }
 
-// -----------------------------------------------------------------------------
-// 24/7 BACKGROUND AUTONOMOUS TRAINING DAEMON
-// Runs continuously on the server regardless of whether any browser is connected!
-// -----------------------------------------------------------------------------
 setInterval(() => {
-  // Step in-engine self-play
   pipelineState.totalGamesGenerated += 1;
   pipelineState.totalPositionsGenerated += Math.floor(24 + Math.random() * 12);
-  
-  // Step blind tournament rescoring
   pipelineState.blindPositionsRescored += Math.random() > 0.4 ? 1 : 0;
-  
-  // Advance training batch
   pipelineState.currentBatchId += 1;
   if (pipelineState.currentBatchId % 40 === 0) {
     pipelineState.currentEpoch = Math.min(50, pipelineState.currentEpoch + 1);
   }
 
-  // Realistic joint loss decay curve
   const progress = Math.min(1.0, pipelineState.currentEpoch / 50);
   const targetLoss = 0.62 * Math.exp(-2.2 * progress) + 0.14;
-  const jitter = (Math.sin(pipelineState.currentBatchId * 0.7) * 0.003);
+  const jitter = Math.sin(pipelineState.currentBatchId * 0.7) * 0.003;
   pipelineState.currentLoss = Math.max(0.12, parseFloat((targetLoss + jitter).toFixed(4)));
   pipelineState.validationLoss = parseFloat((pipelineState.currentLoss * 1.045 + 0.004).toFixed(4));
   pipelineState.learningRate = parseFloat((0.001 * Math.pow(0.96, pipelineState.currentEpoch)).toFixed(6));
   pipelineState.screluActivationMean = Math.round(1240 + Math.sin(pipelineState.currentBatchId * 0.1) * 35);
   pipelineState.activeCheckpoint = `berserker_dual_net_ep${pipelineState.currentEpoch}_b${pipelineState.currentBatchId}.nnue`;
-
   pipelineState.lastUpdatedTimestamp = Date.now();
 
-  // Persist to disk every 10 ticks (~30s)
   if (pipelineState.currentBatchId % 10 === 0) {
     saveStateToDisk();
   }
@@ -157,6 +495,47 @@ async function startServer() {
     next();
   });
   app.use(express.static(path.join(__dirname, 'public')));
+
+  // Automatic Raw NNUE & Native SMP Engine Info
+  app.get('/api/engine/info', async (_req, res) => {
+    try {
+      await nativeEngine.boot();
+    } catch {
+      // report current status
+    }
+    res.json(nativeEngine.getInfo());
+  });
+
+  // Same-origin cached NNUE binary endpoint (auto-fetched from GitHub raw URL on demand)
+  app.get(`/api/nnue/${EMBEDDED_NNUE_FILE}`, async (_req, res) => {
+    try {
+      const nnuePath = await ensureNnueCachedOnServer();
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      res.sendFile(nnuePath);
+    } catch (err) {
+      res.status(502).json({
+        error: err instanceof Error ? err.message : 'Failed to auto-load NNUE binary',
+      });
+    }
+  });
+
+  // Native C++20 Lazy SMP Search Endpoint
+  app.post('/api/engine/berserker', async (req, res) => {
+    try {
+      const result = await nativeEngine.search({
+        fen: req.body?.fen,
+        moves: req.body?.moves,
+        depth: req.body?.depth,
+        movetime: req.body?.movetime,
+      });
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({
+        error: err instanceof Error ? err.message : 'Native search failed',
+      });
+    }
+  });
 
   // API Route: Current 24/7 Persistent Pipeline State
   app.get('/api/berserker/state', (_req, res) => {
@@ -176,7 +555,6 @@ async function startServer() {
     });
   });
 
-  // Mount Vite dev server in middleware mode
   const vite = await createViteServer({
     server: { middlewareMode: true },
     appType: 'spa',
@@ -185,9 +563,27 @@ async function startServer() {
   app.use(vite.middlewares);
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 [Berserker Server] Running on http://localhost:${PORT}`);
-    console.log(`⚡ [Berserker 24/7 Daemon] Active: Generating self-play & rescoring FENs continuously.`);
+    console.log(`[Berserker Server] Running on http://localhost:${PORT}`);
+    // Asynchronously pre-warm native C++20 Lazy SMP engine + auto-loaded 138.4 MB NNUE
+    nativeEngine
+      .boot()
+      .then(() => {
+        const info = nativeEngine.getInfo();
+        console.log(
+          `[Berserker Native] Ready: ${info.nnueFile} (${info.nnueBytes} bytes auto-loaded), Threads=${info.threads}, Hash=${info.hashMb}MB`
+        );
+      })
+      .catch((err) => {
+        console.warn('[Berserker Native] Pre-warm deferred:', err instanceof Error ? err.message : err);
+      });
   });
+
+  const handleShutdown = () => {
+    nativeEngine.shutdown();
+    process.exit(0);
+  };
+  process.on('SIGINT', handleShutdown);
+  process.on('SIGTERM', handleShutdown);
 }
 
 startServer();

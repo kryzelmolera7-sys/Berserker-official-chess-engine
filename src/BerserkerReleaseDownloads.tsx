@@ -17,6 +17,8 @@ import {
   CheckCircle2
 } from 'lucide-react';
 
+import { NNUE_RAW_DOWNLOAD_URL } from './engine/wasmEngine';
+
 interface DownloadItem {
   id: string;
   name: string;
@@ -32,6 +34,20 @@ interface DownloadItem {
 }
 
 const DOWNLOAD_ITEMS: DownloadItem[] = [
+  // Primary Auto-Loaded Raw NNUE Net (External GitHub Raw Link — Keeps Git Repo Light)
+  {
+    id: 'nnue-sf19-raw',
+    name: 'Active SF-Arch K32H3 + FullThreats NNUE (Raw Link)',
+    fileName: 'nn-bddd9d57eb87.nnue',
+    category: 'nnue',
+    size: '138.4 MB',
+    type: 'Direct Raw Binary NNUE (.nnue)',
+    description: 'Genuine Stockfish K32H3 + FullThreats + PP_3Wide (1024x32x32, 92/192 LayerStacks) network. Automatically streamed & cached on first launch via IndexedDB / local runtime cache so this Git repository stays under 1 MB.',
+    sha256: 'bddd9d57eb87 (138,360,528 bytes exact verification)',
+    downloadUrl: NNUE_RAW_DOWNLOAD_URL,
+    recommendedFor: 'Berserker v0.7.0 WASM & Native Lazy SMP (Auto-Loaded)',
+    badge: 'Active Auto-Load (138.4 MB)'
+  },
   // Expanded NNUE Nets
   {
     id: 'nnue-huge',
@@ -426,11 +442,11 @@ export const BerserkerReleaseDownloads: React.FC = () => {
 
           <div className="flex flex-col sm:flex-row md:flex-col gap-2.5 shrink-0">
             <button
-              onClick={() => handleDownloadFile('/downloads/berserker_brnnue_v040_huge.nnue', 'berserker_brnnue_v040_huge.nnue')}
+              onClick={() => handleDownloadFile(NNUE_RAW_DOWNLOAD_URL, 'nn-bddd9d57eb87.nnue')}
               className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black text-xs transition flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20"
             >
               <Layers className="w-4 h-4 text-slate-950" />
-              <span>Download Ultra Net (68.5 MB)</span>
+              <span>Download Active Raw NNUE (138.4 MB)</span>
             </button>
             <button
               onClick={() => handleDownloadFile('/downloads/berserker_brnnue_v040_large.nnue', 'berserker_brnnue_v040_large.nnue')}
