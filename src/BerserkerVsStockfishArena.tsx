@@ -17,7 +17,6 @@ import {
   Download, 
   Sparkles, 
   BookOpen, 
-  Database,
   Sliders,
   TrendingUp,
   Award,
@@ -27,7 +26,6 @@ import {
 import { ChessPiece } from './ChessPiece';
 import { searchStockfish19, Stockfish19SearchResult } from './engine/stockfish19Service';
 import { searchBerserkerDuelMove, BerserkerDuelSearchResult } from './engine/berserkerDuelEngine';
-import { countPieces } from './tablebaseService';
 
 export interface GameRecord {
   gameNumber: number;
@@ -206,14 +204,12 @@ export const BerserkerVsStockfishArena: React.FC = () => {
             ]);
 
             // Formulate broadcast commentary
-            if (res.reason === 'syzygy-tablebase-7man') {
-              setLiveCommentary(`Move ${moveObj.san}: 7-Man Syzygy Tablebase executed with 100% mathematical certainty!`);
-            } else if (res.reason === 'gm-opening-book') {
+            if (res.reason === 'gm-opening-book') {
               setLiveCommentary(`Move ${moveObj.san}: Grandmaster theoretical book line [${res.bookInfo?.openingName || 'Theory'}].`);
             } else if (res.reason === 'prophylactic-squeeze') {
               setLiveCommentary(`Move ${moveObj.san}: ${res.prophylacticDetail || 'Petrosian Prophylactic Squeeze deployed against SF19.'}`);
             } else {
-              setLiveCommentary(`Move ${moveObj.san}: Deep BRnnue Quad-Head search (Eval: ${(res.scoreCp / 100).toFixed(2)}).`);
+              setLiveCommentary(`Move ${moveObj.san}: Deep Pure-PVS + NNUE search (Eval: ${(res.scoreCp / 100).toFixed(2)}).`);
             }
           }
         }
@@ -383,7 +379,7 @@ export const BerserkerVsStockfishArena: React.FC = () => {
               <span className="text-amber-300">Stockfish 19 FULL</span>
             </h2>
             <p className="text-xs text-slate-300 max-w-3xl leading-relaxed">
-              Real-time grandmaster duel between <span className="text-purple-300 font-semibold">Berserker v0.8.0</span> (BRnnue Quad-Head + Petrosian Prophylaxis II + Syzygy 7-Man) and <span className="text-amber-300 font-semibold">Stockfish 19 FULL</span> (WASM + official 99MB <code className="text-[11px] font-mono bg-slate-950 px-1 py-0.5 rounded">nn-1a298aa575a0.nnue</code>).
+              Real-time grandmaster duel between <span className="text-purple-300 font-semibold">Berserker v0.8.0</span> (Pure-PVS + 138.4MB NNUE + Prophylaxis II) and <span className="text-amber-300 font-semibold">Stockfish 19 FULL</span> (WASM + official 99MB <code className="text-[11px] font-mono bg-slate-950 px-1 py-0.5 rounded">nn-1a298aa575a0.nnue</code>).
             </p>
           </div>
 
@@ -651,8 +647,8 @@ export const BerserkerVsStockfishArena: React.FC = () => {
                 <span className="font-mono text-purple-300 font-semibold">BRnnue Quad-Head</span>
               </div>
               <div className="flex items-center justify-between text-[11px]">
-                <span className="text-slate-400">Endgame Tablebase:</span>
-                <span className="font-mono text-emerald-400 font-semibold">Syzygy 7-Man Active</span>
+                <span className="text-slate-400">Endgame Search:</span>
+                <span className="font-mono text-emerald-400 font-semibold">Autonomous Pure-PVS</span>
               </div>
               <div className="flex items-center justify-between text-[11px]">
                 <span className="text-slate-400">Move Selection:</span>

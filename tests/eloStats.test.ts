@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   computePentanomialStats,
+  computePentanomialSprt,
   summarizePairOutcomes,
   formatRecklessReport,
 } from '../src/engine/eloStats';
@@ -71,4 +72,21 @@ test('eloStats: handles empty and 100% sweep outcomes without NaN', () => {
   assert.equal(sweep.games, 6);
   assert.ok(Number.isFinite(sweep.elo) && sweep.elo > 500);
   assert.ok(Number.isFinite(sweep.err95));
+});
+
+test('eloStats: Pentanomial SPRT passes H1 on decisive positive score and fails H0 on negative score', () => {
+  const tenPairStats = computePentanomialStats([0, 0, 1, 1, 8]); // 10 pairs = 20 games
+  const tenPairRunning = computePentanomialSprt(tenPairStats, { elo0: 0, elo1: 10 });
+  assert.equal(tenPairRunning.status, 'RUNNING');
+  assert.ok(tenPairRunning.llr > 2.0 && tenPairRunning.llr < tenPairRunning.upperBound);
+
+  const passStats = computePentanomialStats([0, 0, 1, 1, 13]); // 15 pairs = 30 games
+  const passSprt = computePentanomialSprt(passStats, { elo0: 0, elo1: 10 });
+  assert.equal(passSprt.status, 'H1_ACCEPTED');
+  assert.ok(passSprt.llr >= passSprt.upperBound);
+
+  const failStats = computePentanomialStats([20, 10, 5, 1, 0]);
+  const failSprt = computePentanomialSprt(failStats, { elo0: 0, elo1: 10 });
+  assert.equal(failSprt.status, 'H0_ACCEPTED');
+  assert.ok(failSprt.llr <= failSprt.lowerBound);
 });

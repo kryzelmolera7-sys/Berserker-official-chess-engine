@@ -56,12 +56,12 @@ export default function App() {
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-purple-500 selection:text-white">
       {/* Top Header */}
       <header className="border-b border-slate-800/80 bg-slate-900/75 backdrop-blur px-4 lg:px-6 py-2.5 flex flex-wrap xl:flex-nowrap items-center justify-between gap-3 sticky top-0 z-30 shadow-sm">
-        <div className="flex items-center gap-2.5 shrink-0">
+        <div className="flex items-center gap-2.5 min-w-0 max-w-full">
           <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-purple-600 via-indigo-600 to-amber-500 flex items-center justify-center text-white shadow-lg shadow-purple-600/30 shrink-0">
             <Gem className="w-5 h-5" />
           </div>
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5 flex-wrap">
               <h1 className="text-base font-black tracking-tight text-white">
                 Berserker
               </h1>
@@ -72,14 +72,14 @@ export default function App() {
                 WASM + 138.4MB NNUE
               </span>
             </div>
-            <p className="text-[11px] text-slate-400 truncate max-w-[340px]">
+            <p className="text-[11px] text-slate-400 truncate max-w-full">
               Standalone C++20 Engine • Pure-PVS &amp; Auto-Loaded 138.4 MB NNUE
             </p>
           </div>
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 overflow-x-auto">
+        <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 overflow-x-auto max-w-full">
           <button
             onClick={() => setActiveTab('downloads')}
             className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap ${

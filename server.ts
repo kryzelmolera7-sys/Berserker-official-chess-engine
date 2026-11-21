@@ -1,9 +1,14 @@
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
+import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'child_process';
+import {
+  clampMatchRunOptions,
+  V070_VS_V060_RESULTS_FILE,
+} from './src/engine/matchConfig';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -555,6 +560,120 @@ async function startServer() {
     });
   });
 
+  // Match Runner: Berserker v0.7.0 (138.4MB NNUE) vs Berserker v0.6.0 (20-game + SPRT)
+  const matchResultsPath = path.join(__dirname, V070_VS_V060_RESULTS_FILE);
+  const matchProgressPath = path.join(STORAGE_DIR, 'v060_match_progress.json');
+  let activeMatchProcess: ChildProcess | null = null;
+  let lastMatchError: string | null = null;
+
+  app.get('/api/engine/match/v060', (_req, res) => {
+    let latestResult = null;
+    let liveProgress = null;
+    try {
+      if (fs.existsSync(matchResultsPath)) {
+        latestResult = JSON.parse(fs.readFileSync(matchResultsPath, 'utf-8'));
+      }
+    } catch {
+      latestResult = null;
+    }
+    try {
+      if (activeMatchProcess && fs.existsSync(matchProgressPath)) {
+        liveProgress = JSON.parse(fs.readFileSync(matchProgressPath, 'utf-8'));
+      }
+    } catch {
+      liveProgress = null;
+    }
+
+    res.json({
+      running: Boolean(activeMatchProcess),
+      error: lastMatchError,
+      hardware: {
+        cpuCores: Math.max(1, os.cpus().length),
+        totalRamMb: Math.round(os.totalmem() / (1024 * 1024)),
+        defaultThreads: 1,
+        defaultHashMb: 64,
+      },
+      liveProgress,
+      latestResult,
+    });
+  });
+
+  app.post('/api/engine/match/v060', async (req, res) => {
+    if (activeMatchProcess) {
+      res.status(409).json({ error: 'A v0.7.0 vs v0.6.0 match is already in progress' });
+      return;
+    }
+
+    const cpuCores = Math.max(1, os.cpus().length);
+    const options = clampMatchRunOptions(req.body || {}, cpuCores);
+
+    try {
+      await ensureNnueCachedOnServer();
+    } catch (err) {
+      res.status(502).json({
+        error: err instanceof Error ? err.message : 'Failed to prepare NNUE weights',
+      });
+      return;
+    }
+
+    lastMatchError = null;
+    try {
+      if (fs.existsSync(matchProgressPath)) fs.unlinkSync(matchProgressPath);
+    } catch {
+      // ignore cleanup error
+    }
+
+    const localTsx = path.join(__dirname, 'node_modules', '.bin', 'tsx');
+    const runnerCmd = fs.existsSync(localTsx) ? localTsx : 'npx';
+    const scriptArgs = [
+      path.join(__dirname, 'scripts', 'run_elo_match.ts'),
+      '--min-pairs',
+      String(options.minPairs ?? 10),
+      '--pairs',
+      String(options.pairs),
+      '--sprt',
+      options.sprt === false ? 'false' : 'true',
+      '--elo0',
+      String(options.elo0 ?? 0),
+      '--elo1',
+      String(options.elo1 ?? 10),
+      '--threads',
+      String(options.threads),
+      '--hash',
+      String(options.hashMb),
+      '--base-ms',
+      String(options.baseMs),
+      '--inc-ms',
+      String(options.incMs),
+      '--workers',
+      '2',
+      '--progress-file',
+      matchProgressPath,
+    ];
+    const runnerArgs = fs.existsSync(localTsx) ? scriptArgs : ['--yes', 'tsx', ...scriptArgs];
+
+    const child = spawn(runnerCmd, runnerArgs, {
+      cwd: __dirname,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    activeMatchProcess = child;
+
+    let stderrTail = '';
+    child.stderr.on('data', (chunk) => {
+      stderrTail = (stderrTail + String(chunk)).slice(-1000);
+    });
+    child.on('exit', (code) => {
+      if (activeMatchProcess === child) {
+        activeMatchProcess = null;
+      }
+      if (code !== 0) {
+        lastMatchError = stderrTail.trim() || `Match runner exited with code ${code}`;
+      }
+    });
+
+    res.status(202).json({ started: true, options });
+  });
+
   const vite = await createViteServer({
     server: { middlewareMode: true },
     appType: 'spa',
@@ -579,6 +698,13 @@ async function startServer() {
   });
 
   const handleShutdown = () => {
+    if (activeMatchProcess) {
+      try {
+        activeMatchProcess.kill('SIGTERM');
+      } catch {
+        // ignore
+      }
+    }
     nativeEngine.shutdown();
     process.exit(0);
   };

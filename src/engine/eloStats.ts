@@ -20,11 +20,30 @@ export interface PentanomialStats {
   los: number;
 }
 
+export interface SprtParams {
+  elo0?: number;
+  elo1?: number;
+  alpha?: number;
+  beta?: number;
+}
+
+export interface SprtResult {
+  elo0: number;
+  elo1: number;
+  alpha: number;
+  beta: number;
+  llr: number;
+  lowerBound: number;
+  upperBound: number;
+  status: 'RUNNING' | 'H1_ACCEPTED' | 'H0_ACCEPTED';
+}
+
 export interface RecklessReportOptions {
   stats: PentanomialStats;
   timeControl: string;
   threads: number;
   hashMb: number;
+  sprt?: SprtResult;
   referenceUrl?: string;
 }
 
@@ -40,6 +59,10 @@ function clampProbability(p: number): number {
 export function probabilityToElo(p: number): number {
   const clamped = clampProbability(p);
   return -400 * Math.log10(1 / clamped - 1);
+}
+
+export function eloToProbability(elo: number): number {
+  return 1 / (1 + Math.pow(10, -elo / 400));
 }
 
 function erfApprox(x: number): number {
@@ -154,21 +177,87 @@ export function summarizePairOutcomes(outcomes: PairMatchOutcome[]): Pentanomial
   return computePentanomialStats(penta, { wins, losses, draws });
 }
 
+export function computePentanomialSprt(
+  stats: Pick<PentanomialStats, 'pairs' | 'penta' | 'scoreRate'>,
+  params: SprtParams = {}
+): SprtResult {
+  const elo0 = params.elo0 ?? 0.0;
+  const elo1 = params.elo1 ?? 10.0;
+  const alpha = params.alpha ?? 0.05;
+  const beta = params.beta ?? 0.05;
+
+  const lowerBound = Math.log(beta / (1 - alpha));
+  const upperBound = Math.log((1 - beta) / alpha);
+
+  if (stats.pairs <= 0) {
+    return {
+      elo0,
+      elo1,
+      alpha,
+      beta,
+      llr: 0,
+      lowerBound,
+      upperBound,
+      status: 'RUNNING',
+    };
+  }
+
+  const mu0 = eloToProbability(elo0);
+  const mu1 = eloToProbability(elo1);
+  const muHat = stats.scoreRate;
+
+  let varSum = 0;
+  for (let i = 0; i < 5; i++) {
+    const diff = PAIR_SCORES[i] - muHat;
+    varSum += stats.penta[i] * diff * diff;
+  }
+  // Regularize variance gently so clean sweeps remain finite
+  const rawVar = varSum / stats.pairs;
+  const variance = Math.max(rawVar, 1 / (8 * (stats.pairs + 1)));
+
+  const d0 = muHat - mu0;
+  const d1 = muHat - mu1;
+  const llr = (stats.pairs / (2 * variance)) * (d0 * d0 - d1 * d1);
+
+  let status: SprtResult['status'] = 'RUNNING';
+  if (llr >= upperBound) status = 'H1_ACCEPTED';
+  else if (llr <= lowerBound) status = 'H0_ACCEPTED';
+
+  return {
+    elo0,
+    elo1,
+    alpha,
+    beta,
+    llr,
+    lowerBound,
+    upperBound,
+    status,
+  };
+}
+
 /**
  * Formats pentanomial results into standard OpenBench / Reckless text output:
  * Elo   | 12.11 +- 2.55 (95%)
+ * SPRT  | LLR 2.95 (-2.94, 2.94) [0.00, 10.00]
  * Conf  | 8.0+0.08s Threads=1 Hash=16MB
  * Games | N: 20012 W: 5555 L: 4858 D: 9599
  * Penta | [89, 2108, 4926, 2783, 100]
  */
 export function formatRecklessReport(options: RecklessReportOptions): string {
-  const { stats, timeControl, threads, hashMb, referenceUrl } = options;
+  const { stats, timeControl, threads, hashMb, sprt, referenceUrl } = options;
   const lines = [
     `Elo   | ${stats.elo.toFixed(2)} +- ${stats.err95.toFixed(2)} (95%)`,
+  ];
+  if (sprt) {
+    lines.push(
+      `SPRT  | LLR ${sprt.llr.toFixed(2)} (${sprt.lowerBound.toFixed(2)}, ${sprt.upperBound.toFixed(2)}) [${sprt.elo0.toFixed(2)}, ${sprt.elo1.toFixed(2)}] (${sprt.status})`
+    );
+  }
+  lines.push(
     `Conf  | ${timeControl} Threads=${threads} Hash=${hashMb}MB`,
     `Games | N: ${stats.games} W: ${stats.wins} L: ${stats.losses} D: ${stats.draws}`,
-    `Penta | [${stats.penta.join(', ')}]`,
-  ];
+    `Penta | [${stats.penta.join(', ')}]`
+  );
   if (referenceUrl) {
     lines.push(referenceUrl);
   }

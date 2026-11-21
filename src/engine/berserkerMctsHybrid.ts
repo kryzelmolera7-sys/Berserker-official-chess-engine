@@ -10,14 +10,13 @@
  * 3. Volatility & PV-Instability Dynamic Time Manager (Clock extension on turning points)
  * 4. Berserker NNUE Dual Policy-Value Head (Neural value & policy logits directly from HalfKAv2)
  * 5. Progressive SEE Pruning at Deep MCTS Tree Leaves (Prunes losing captures at depth >= 5)
- * 6. Syzygy Endgame Tablebase Direct MCTS Integration (Exact 3-6 piece terminal resolutions)
+ * 6. Autonomous Endgame Search (Evaluates all endgames via NNUE + PVS without tablebase overrides)
  * 7. Dynamic Contempt & Tournament Must-Win Profiling (Penalizes premature sterile draws)
  */
 
 import { Chess, Move, Square, PieceSymbol, Color } from 'chess.js';
 import { evaluateBRnnueV030, evaluateBerserkerDualPolicyValue } from './brnnueDualEval';
 import { staticExchangeEvaluation, searchIndependentBerserker, pieceToIdx } from './berserkerIndependentSearch';
-import { probeTablebase } from './syzygyTablebase';
 
 export interface OpponentThreat {
   uci: string;
@@ -123,7 +122,7 @@ const DEFAULT_CONFIG: Required<HybridSearchConfig> = {
   enableSubtreeReuse: true,
   enableTacticalRollout: true,
   enableTranspositionTable: true,
-  enableTablebase: true,
+  enableTablebase: false,
   enableProgressiveSeePruning: true,
   enableProphylaxis: true,
   virtualLossWeight: 0.35,
@@ -757,18 +756,6 @@ export function runMctsSearch(
 
   const rootChess = new Chess(startFen);
 
-  // Check Syzygy Tablebase at root
-  if (enableTb) {
-    const tb = probeTablebase(rootChess);
-    if (tb.isHit && tb.wdl !== null) {
-      tbHits++;
-      root.isTerminal = true;
-      root.terminalScore = tb.wdl;
-      persistentMctsRoot = root;
-      return { root, completedSims: 1, timeMs: 1, reused: false, reusedVisits: 0, ttHits: 0, tbHits, timeExtensions: 0 };
-    }
-  }
-
   // Expand root node if not already expanded
   if (!root.isExpanded) {
     const rootMoves = rootChess.moves({ verbose: true });
@@ -886,20 +873,7 @@ export function runMctsSearch(
       current.terminalScore = 0.0;
       leafValue = 0.0;
     } else {
-      let tbHit = false;
-      if (enableTb) {
-        const tb = probeTablebase(simChess);
-        if (tb.isHit && tb.wdl !== null) {
-          tbHits++;
-          tbHit = true;
-          current.isTerminal = true;
-          current.terminalScore = tb.wdl;
-          leafValue = tb.wdl;
-        }
-      }
-
-      if (!tbHit) {
-        const currentFen = simChess.fen();
+      const currentFen = simChess.fen();
         let cached = enableTT ? mctsTranspositionTable.get(currentFen) : undefined;
 
         if (cached) {
@@ -952,7 +926,6 @@ export function runMctsSearch(
           }));
           current.isExpanded = true;
         }
-      }
     }
 
     // 3. Backpropagation: Revert virtual loss and propagate evaluation
@@ -1002,38 +975,6 @@ export function searchHybridNnueMcts(
   const config = { ...DEFAULT_CONFIG, ...userConfig };
   const chess = new Chess(fen);
   const legalMoves = chess.moves({ verbose: true });
-
-  // Instant Tablebase Check
-  if (config.enableTablebase) {
-    const tb = probeTablebase(chess);
-    if (tb.isHit && tb.wdl !== null && legalMoves.length > 0) {
-      const best = legalMoves[0];
-      const bestUci = `${best.from}${best.to}${best.promotion || ''}`;
-      return {
-        bestMoveSan: best.san,
-        bestMoveUci: bestUci,
-        scoreCp: tb.scoreCp,
-        mctsSelectedUci: bestUci,
-        pvsSelectedUci: bestUci,
-        decisionReason: 'tablebase-hit',
-        mctsVisits: 100,
-        pvsDepth: tb.dtz,
-        mctsTopMoves: [{ uci: bestUci, san: best.san, visits: 100, qValue: tb.wdl, prior: 1 }],
-        safetyNetDeltaCp: 0,
-        timeMs: 1,
-        totalSimulations: 1,
-        treeReused: false,
-        reusedVisits: 0,
-        tacticalVolatility: 0,
-        transpositionHits: 0,
-        tablebaseHits: 1,
-        timeExtensionsGranted: 0,
-        activeOpponentThreats: [],
-        prophylaxisMove: '',
-        prophylaxisScore: 0
-      };
-    }
-  }
 
   if (legalMoves.length === 0) {
     return {

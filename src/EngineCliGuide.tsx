@@ -1,23 +1,120 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   Terminal, 
   Code2, 
   Copy, 
   Check, 
-  Download, 
   Cpu, 
   Zap, 
-  TrendingUp, 
-  FileText, 
-  Sparkles,
   Award,
   Database,
   GitBranch,
-  Play
+  Play,
+  ExternalLink,
+  RefreshCw,
+  ShieldCheck
 } from 'lucide-react';
+import {
+  BASELINE_V060_RELEASE_URL,
+  type MatchResultPayload,
+} from './engine/matchConfig';
+import type { PentanomialStats, SprtResult } from './engine/eloStats';
+
+interface LiveProgressPayload {
+  running: boolean;
+  completedPairs: number;
+  totalPairs: number;
+  threads: number;
+  hashMb: number;
+  timeControl: string;
+  hardwareSummary: string;
+  resultSummary: string;
+  eloSummary: string;
+  stats: PentanomialStats;
+  sprt?: SprtResult;
+  elapsedSec: number;
+}
+
+interface MatchApiResponse {
+  running: boolean;
+  error: string | null;
+  hardware: {
+    cpuCores: number;
+    totalRamMb: number;
+    defaultThreads: number;
+    defaultHashMb: number;
+  };
+  liveProgress: LiveProgressPayload | null;
+  latestResult: MatchResultPayload | null;
+}
 
 export const EngineCliGuide: React.FC = () => {
   const [copiedSection, setCopiedSection] = useState<string | null>(null);
+  const [matchApi, setMatchApi] = useState<MatchApiResponse | null>(null);
+  const [isLoadingMatch, setIsLoadingMatch] = useState<boolean>(true);
+  const [matchError, setMatchError] = useState<string | null>(null);
+
+  const [selectedThreads, setSelectedThreads] = useState<number>(1);
+  const [selectedHashMb, setSelectedHashMb] = useState<number>(64);
+  const [selectedMinPairs, setSelectedMinPairs] = useState<number>(10);
+  const [startingMatch, setStartingMatch] = useState<boolean>(false);
+
+  const fetchMatchStatus = useCallback(async () => {
+    try {
+      const resp = await fetch('/api/engine/match/v060');
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data: MatchApiResponse = await resp.json();
+      setMatchApi(data);
+      if (data.error) setMatchError(data.error);
+    } catch (err) {
+      setMatchError(err instanceof Error ? err.message : 'Unable to fetch match status');
+    } finally {
+      setIsLoadingMatch(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchMatchStatus();
+  }, [fetchMatchStatus]);
+
+  useEffect(() => {
+    if (!matchApi?.running) return;
+    const timer = setInterval(() => {
+      fetchMatchStatus();
+    }, 1500);
+    return () => clearInterval(timer);
+  }, [matchApi?.running, fetchMatchStatus]);
+
+  const handleStartLiveMatch = async () => {
+    setStartingMatch(true);
+    setMatchError(null);
+    try {
+      const resp = await fetch('/api/engine/match/v060', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          minPairs: selectedMinPairs,
+          pairs: Math.max(selectedMinPairs, 20),
+          sprt: true,
+          elo0: 0,
+          elo1: 10,
+          threads: selectedThreads,
+          hashMb: selectedHashMb,
+          baseMs: 2500,
+          incMs: 150,
+        }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        throw new Error(data.error || `HTTP ${resp.status}`);
+      }
+      await fetchMatchStatus();
+    } catch (err) {
+      setMatchError(err instanceof Error ? err.message : 'Failed to start match');
+    } finally {
+      setStartingMatch(false);
+    }
+  };
 
   const handleCopy = (id: string, text: string) => {
     navigator.clipboard.writeText(text);
@@ -25,75 +122,50 @@ export const EngineCliGuide: React.FC = () => {
     setTimeout(() => setCopiedSection(null), 2000);
   };
 
-  const terminalRunSnippet = `# 1. Run Berserker v0.7.1-dev Standalone UCI Engine directly via Terminal:
-node berserker-cli.js
+  const activeData = matchApi?.running && matchApi.liveProgress ? matchApi.liveProgress : matchApi?.latestResult;
+  const activeStats = activeData?.stats;
+  const activeSprt = activeData?.sprt;
+  const hostCores = matchApi?.hardware?.cpuCores ?? matchApi?.latestResult?.hostCpuCores ?? 4;
+  const hostRamGb = ((matchApi?.hardware?.totalRamMb ?? matchApi?.latestResult?.hostTotalRamMb ?? 12288) / 1024).toFixed(1);
+  const hwThreads = activeData?.threads ?? selectedThreads;
+  const hwHashMb = activeData?.hashMb ?? selectedHashMb;
 
-# Or with bun (ultra-fast startup):
-bun berserker-cli.js
+  const terminalRunSnippet = `# 1. Run Berserker v0.7.0 Native C++20 Engine directly via Terminal:
+./bin/berserker-native
+
+# Or run via Node.js WASM UCI bridge:
+node berserker-cli.js
 
 # Send standard UCI commands:
 uci
-setoption name Hash value 16
+setoption name Threads value ${hwThreads}
+setoption name Hash value ${hwHashMb}
+setoption name EvalFile value storage/nn-cache/nn-bddd9d57eb87.nnue
 isready
 position startpos moves e2e4 e7e5
 eval
-go wtime 3000 btime 3000 winc 120 binc 120
+go wtime 2500 btime 2500 winc 150 binc 150
 quit`;
 
-  const releaseAnnouncementSnippet = `# Berserker v0.7.1-dev: Incremental Search, Zero-Alloc Eval & Time-Control Release
+  const matchCommandSnippet = `# Run 20-Game + Pentanomial SPRT UCI Match vs Berserker v0.6.0:
+npx --yes tsx scripts/run_elo_match.ts --min-pairs 10 --pairs 20 --sprt true --elo0 0 --elo1 10 --threads 1 --hash 64 --workers 2 --base-ms 2500 --inc-ms 150`;
 
-We are excited to share **Berserker v0.7.1-dev**, an incremental release focused on eliminating inner-node overhead, fixing tactical horizon blind spots, and hardening real-time UCI clock discipline against the previous baseline (**Berserker v0.6.0**).
-
----
-
-### Real Head-to-Head Tested Match vs Berserker v0.6.0
-
-Tested via 28 opening-book pairs (56 games, swapped colors, 4 parallel workers, local \`scripts/run_elo_match.ts\`):
-
-\`\`\`
-Elo   | 265.10 +- 128.84 (95%)
-Conf  | 3.0+0.12s Threads=1 Hash=16MB
-Games | N: 56 W: 42 L: 6 D: 8
-Penta | [1, 1, 4, 5, 17]
-\`\`\`
-
-- **LOS (Likelihood of Superiority)**: \`100.00%\` | **Score Rate**: \`82.14%\`
-- **Terminations**: 6 checkmates (4 for v0.7.1-dev), 7 win adjudications (4 for v0.7.1-dev), 8 rule draws; 1 timeout by v0.7.1-dev vs 34 timeouts by v0.6.0 due to v0.6.0's legacy 2048-node timer polling and per-node FEN allocations.
-
----
-
-### Incremental Improvements in Berserker v0.7.1-dev
-
-1. **Zero-Allocation TypedArray Evaluation & O(1) Bitwise Passed Pawns**:
-   - Rewrote \`evaluatePosition\` to reuse pre-allocated \`Int8Array\` / \`Uint8Array\` scratch buffers with zero heap allocations inside leaf nodes.
-   - Added O(1) bitwise passed-pawn masks, symmetric positional imbalances (bishop pair, doubled/isolated pawns, rook open/semi-open & 7th rank, king pawn shield), +12 cp tempo bonus, and corrected \`PST_MG/EG.p\` rank orientation.
-
-2. **Native Zobrist Transposition Table Keys & Halfmove Propagation**:
-   - Replaced per-node \`chess.fen()\` string splitting in \`pvsSearch\` with O(1) \`chess.hash()\` 64-bit Zobrist keys and propagated \`halfmoveClock\` through recursive search calls for accurate 50-move decay.
-   - Fixed \`staticEvalStack[ply]\` check sentinel (\`99999\`) and improving RFP margins.
-
-3. **O(1) Static Exchange Evaluation (SEE) & Quiescence Checkmate Detection**:
-   - Replaced \`chess.move() + chess.moves() + chess.undo()\` in \`staticExchangeEvaluation\` with O(1) \`chess.attackers(move.to, enemy)\`.
-   - Fixed \`quiescenceSearch\` to skip \`standPat\` when \`inCheck\`, generate all legal check evasions, return \`-25000 + ply\` on checkmate, and never prune \`#\` checkmate moves in LMP, Futility, or QSearch SEE.
-
-4. **Chess960 Castling Parser & PVS-First Hybrid-MCTS Time Control**:
-   - Fixed \`extractCastlingConfig(backrank)\` FEN digit expansion (e.g. \`RNBQK2R\`) so shuffled/unexpanded backranks never misparse.
-   - Reordered \`Hybrid-MCTS-PVS\` to run PVS iterative deepening first (85% time budget) before MCTS PUCT/Prophylaxis verification (checking clock every 4 simulations with a 10 ms IPC reserve).
-
----
-
-### Quick Start / Reproduce Benchmark
-
-\`\`\`bash
-# Run Berserker v0.7.1-dev UCI CLI:
-node berserker-cli.js
-
-# Run unit & regression test suite (92 tests):
-npx --yes tsx --test tests/*.test.ts src/engine/*.test.ts
-
-# Run head-to-head pentanomial UCI match vs Berserker v0.6.0:
-npx --yes tsx scripts/run_elo_match.ts --pairs 28 --workers 4 --base-ms 3000 --inc-ms 120
-\`\`\``;
+  const reportBlock =
+    matchApi?.latestResult?.reportText ||
+    (activeStats
+      ? [
+          `Elo   | ${activeStats.elo >= 0 ? '+' : ''}${activeStats.elo.toFixed(2)} +- ${activeStats.err95.toFixed(2)} (95%)`,
+          activeSprt
+            ? `SPRT  | LLR ${activeSprt.llr.toFixed(2)} (${activeSprt.lowerBound.toFixed(2)}, ${activeSprt.upperBound.toFixed(2)}) [${activeSprt.elo0.toFixed(2)}, ${activeSprt.elo1.toFixed(2)}] (${activeSprt.status})`
+            : null,
+          `Conf  | ${activeData?.timeControl || '2.5+0.15s'} Threads=${hwThreads} Hash=${hwHashMb}MB`,
+          `Games | N: ${activeStats.games} W: ${activeStats.wins} L: ${activeStats.losses} D: ${activeStats.draws}`,
+          `Penta | [${activeStats.penta.join(', ')}]`,
+          BASELINE_V060_RELEASE_URL,
+        ]
+          .filter(Boolean)
+          .join('\n')
+      : '# Run a match above or execute scripts/run_elo_match.ts to generate live v0.7.0 NNUE vs v0.6.0 telemetry.');
 
   const selfPlayBakeSnippet = `# 1. Generate autonomous self-play games and automatically bake datasets:
 node scripts/generate_and_bake.js --games 100 --depth 5 --movetime 120 --outdir ./data
@@ -279,110 +351,247 @@ jobs:
           git commit -m "chore(nnue): train from Leela games & update berserker_dual_net_ep9_b400.nnue [skip ci]" || echo "No changes to commit"
           git push origin HEAD || echo "Push step finished"`;
 
-  const importTsSnippet = `import { searchBestMove, evaluatePosition, setEvalMode } from './berserker-cli.js';
+  const importTsSnippet = `import { searchBestMove, evaluatePosition } from './berserker-cli.js';
 import { Chess } from 'chess.js';
 
 const chess = new Chess();
+const evalCp = evaluatePosition(chess);
+const result = searchBestMove(chess, 10, 1500);
+console.log('NNUE Eval:', evalCp, 'cp | Best:', result.bestMoveUci);`;
 
-// 1. Next-Gen Dual NNUE evaluation (BRnnuev030: Berserker v0.9.0 + PlentyChess)
-const brnnueCp = evaluatePosition(chess, 'brnnue-v030');
-console.log('BRnnuev030 Dual Eval:', brnnueCp, 'centipawns');
+  const cppSnippet = `# Compile native C++20 Lazy SMP UCI binary:
+npm run build:native
 
-// 2. Previous baseline evaluation (Berserker 1.0 NNUE)
-const bsz10Cp = evaluatePosition(chess, 'berserker-1.0-nnue');
-console.log('Berserker 1.0 NNUE Eval:', bsz10Cp, 'centipawns');
-console.log('Delta:', brnnueCp - bsz10Cp, 'cp');
-
-// 3. Multi-ply PVS Alpha-Beta search with Transposition Table
-const result = searchBestMove(chess, 8, 2000);
-console.log('Best Move:', result.bestMoveUci);
-console.log('Score:', result.scoreCp, 'cp');
-console.log('Principal Variation:', result.pv.join(' '));`;
-
-  const cppSnippet = `# Compile native standalone C++17 UCI binary with AVX2/AVX-512 optimizations:
-g++ -O3 -std=c++17 -march=native berserker_standalone/berserker_engine.cpp -o berserker
-
-# Run native engine:
-./berserker`;
+# Run native engine (auto-loads 138.4 MB nn-bddd9d57eb87.nnue):
+./bin/berserker-native`;
 
   return (
     <div className="max-w-5xl mx-auto p-4 lg:p-6 space-y-6">
-      {/* Top Banner */}
-      <div className="bg-gradient-to-r from-purple-900/60 via-slate-900 to-indigo-900/40 border border-purple-500/30 rounded-2xl p-6 shadow-2xl relative overflow-hidden">
-        <div className="relative z-10 space-y-2">
-          <div className="flex items-center gap-2">
-            <span className="px-2.5 py-0.5 rounded-full bg-purple-500/20 text-purple-300 font-mono text-xs font-bold border border-purple-500/40 uppercase">
-              Berserker v0.7.1-dev Release
-            </span>
-            <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-mono text-xs font-bold border border-emerald-500/40">
-              +265.10 +- 128.84 Elo vs v0.6.0 (N=56)
-            </span>
-          </div>
-          <h2 className="text-2xl font-black tracking-tight text-white">
-            Verified Pentanomial Match Benchmark &amp; UCI CLI Toolkit
-          </h2>
-          <p className="text-sm text-slate-300 max-w-2xl leading-relaxed">
-            Head-to-head tested against the previous <code className="text-purple-300 font-mono">berserker-v0.6.0-cli.js</code> model across 28 opening-book pairs (56 games at 3.0+0.12s, Hash=16MB, Threads=1), alongside autonomous self-play baking &amp; CI workflows.
-          </p>
-        </div>
-
-        {/* Quick Stats Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-4 border-t border-slate-800/80 mt-4">
-          <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-1">
-            <span className="text-[11px] text-slate-400 uppercase font-mono font-semibold block">v0.7.1-dev vs v0.6.0 Score</span>
-            <span className="text-lg font-bold text-emerald-400 block">82.14% Score Rate</span>
-            <span className="text-xs text-slate-400 block">42 Wins • 8 Draws • 6 Losses (56 Games)</span>
-            <span className="text-xs font-mono font-bold text-purple-300 mt-2 block">+265.10 +- 128.84 Elo (100% LOS)</span>
-          </div>
-
-          <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-1">
-            <span className="text-[11px] text-slate-400 uppercase font-mono font-semibold block">Pentanomial Distribution</span>
-            <span className="text-base font-bold text-white font-mono block">[1, 1, 4, 5, 17]</span>
-            <span className="text-xs text-slate-400 block">Conf: 3.0+0.12s Threads=1 Hash=16MB</span>
-            <span className="text-xs font-mono font-bold text-cyan-400 mt-2 block">OpenBench / Reckless Format</span>
-          </div>
-
-          <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-1">
-            <span className="text-[11px] text-slate-400 uppercase font-mono font-semibold block">Incremental Gains</span>
-            <span className="text-base font-bold text-amber-300 block">Zero-Alloc Eval &amp; Zobrist TT</span>
-            <span className="text-xs text-slate-400 block">QSearch Evasion + PVS-First MCTS Clock</span>
-            <span className="text-xs font-mono font-bold text-emerald-400 mt-2 block">92 / 92 Tests Passing</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Official Berserker v0.7.1-dev Release Announcement */}
-      <div className="bg-slate-900 border-2 border-purple-500/50 rounded-2xl p-6 shadow-2xl space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-4">
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <span className="px-2.5 py-0.5 rounded-full bg-purple-500/20 text-purple-300 font-mono text-[11px] font-bold border border-purple-500/40">
-                OFFICIAL DEV BUILD
+      {/* Top Match & Hardware Banner */}
+      <div className="bg-gradient-to-r from-purple-950/70 via-slate-900 to-indigo-950/50 border border-purple-500/30 rounded-2xl p-6 shadow-2xl space-y-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="px-2.5 py-0.5 rounded-md bg-purple-500/20 text-purple-300 font-mono text-xs font-bold border border-purple-500/40 uppercase">
+                Berserker v0.7.0 (138.4 MB NNUE) vs v0.6.0
               </span>
-              <span className="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 font-mono text-[11px] font-bold">
-                Elo +265.10 +- 128.84 (N=56)
-              </span>
+              {activeSprt && (
+                <span
+                  className={`px-2.5 py-0.5 rounded-md font-mono text-xs font-bold border ${
+                    activeSprt.status === 'H1_ACCEPTED'
+                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                      : activeSprt.status === 'H0_ACCEPTED'
+                      ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                      : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                  }`}
+                >
+                  SPRT {activeSprt.status} • LLR {activeSprt.llr.toFixed(2)} ({activeSprt.lowerBound.toFixed(2)}, {activeSprt.upperBound.toFixed(2)})
+                </span>
+              )}
             </div>
-            <h3 className="text-xl font-extrabold text-white flex items-center gap-2">
-              <Award className="w-5 h-5 text-purple-400" />
-              Berserker v0.7.1-dev Release Announcement (Ready to Copy &amp; Paste)
-            </h3>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Copy-paste ready release notes with real pentanomial match telemetry against Berserker v0.6.0.
+
+            <h2 className="text-2xl font-black tracking-tight text-white">
+              Pentanomial + SPRT Head-to-Head Match vs Berserker v0.6.0
+            </h2>
+            <p className="text-sm text-slate-300 max-w-2xl leading-relaxed">
+              Live UCI match comparing <code className="text-purple-300 font-mono">Berserker v0.7.0</code> (C++20 Pure-PVS + auto-loaded <code className="text-emerald-300 font-mono">nn-bddd9d57eb87.nnue</code>) against the older{' '}
+              <a
+                href={BASELINE_V060_RELEASE_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-cyan-300 hover:text-cyan-200 underline inline-flex items-center gap-1 font-mono text-xs"
+              >
+                Berserker v0.6.0 Release
+                <ExternalLink className="w-3 h-3" />
+              </a>
+              .
             </p>
           </div>
+
           <button
-            onClick={() => handleCopy('announcement', releaseAnnouncementSnippet)}
-            className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-mono text-xs transition flex items-center gap-2 font-bold shadow-lg shadow-purple-600/30"
+            type="button"
+            onClick={fetchMatchStatus}
+            className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-mono flex items-center gap-1.5 border border-slate-700"
           >
-            {copiedSection === 'announcement' ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-            {copiedSection === 'announcement' ? 'Copied Announcement!' : 'Copy Release Announcement'}
+            <RefreshCw className={`w-3.5 h-3.5 ${matchApi?.running ? 'animate-spin text-amber-400' : ''}`} />
+            <span>Refresh Telemetry</span>
           </button>
         </div>
 
-        <pre className="p-4 bg-slate-950 rounded-xl border border-slate-800 font-mono text-xs text-slate-200 overflow-x-auto leading-relaxed max-h-[380px]">
-          {releaseAnnouncementSnippet}
+        {/* Hardware, Results & Elo Gain Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-4 border-t border-slate-800/80">
+          <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-1">
+            <span className="text-[11px] text-slate-400 uppercase font-mono font-semibold block">
+              Hardware Configuration
+            </span>
+            <span className="text-lg font-bold text-cyan-300 font-mono block" data-testid="match-hardware">
+              {hwThreads} {hwThreads === 1 ? 'Thread' : 'Threads'} | {hwHashMb} MB Hash
+            </span>
+            <span className="text-xs text-slate-400 block">
+              Host: {hostCores} vCPU Cores • {hostRamGb} GiB RAM
+            </span>
+            <span className="text-xs font-mono text-slate-500 mt-1 block">
+              TC: {activeData?.timeControl || '2.5+0.15s'}
+            </span>
+          </div>
+
+          <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-1">
+            <span className="text-[11px] text-slate-400 uppercase font-mono font-semibold block">
+              Match Results (N | W | L | D)
+            </span>
+            {isLoadingMatch ? (
+              <span className="text-sm font-mono text-slate-400 block">Loading match data...</span>
+            ) : activeStats ? (
+              <>
+                <span className="text-lg font-bold text-white font-mono block" data-testid="match-results">
+                  N: {activeStats.games} | W: {activeStats.wins} | L: {activeStats.losses}
+                </span>
+                <span className="text-xs text-slate-400 font-mono block">
+                  D: {activeStats.draws} • Penta: [{activeStats.penta.join(', ')}]
+                </span>
+                <span className="text-xs font-mono font-bold text-emerald-400 mt-1 block">
+                  Score: {(activeStats.scoreRate * 100).toFixed(1)}%
+                </span>
+              </>
+            ) : (
+              <span className="text-sm font-mono text-slate-400 block">No match recorded yet</span>
+            )}
+          </div>
+
+          <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-1">
+            <span className="text-[11px] text-slate-400 uppercase font-mono font-semibold block">
+              Elo Gain &amp; SPRT Status
+            </span>
+            {activeStats ? (
+              <>
+                <span className="text-lg font-bold text-emerald-400 font-mono block" data-testid="match-elo">
+                  {activeStats.elo >= 0 ? '+' : ''}
+                  {activeStats.elo.toFixed(2)} +- {activeStats.err95.toFixed(2)} Elo
+                </span>
+                <span className="text-xs text-slate-300 font-mono block">
+                  LOS: {(activeStats.los * 100).toFixed(2)}% (95% CI)
+                </span>
+                <span className="text-xs font-mono text-purple-300 mt-1 block">
+                  {activeSprt
+                    ? `LLR ${activeSprt.llr.toFixed(2)} [${activeSprt.elo0.toFixed(0)}, ${activeSprt.elo1.toFixed(0)}] • ${activeSprt.status}`
+                    : 'Fixed Pair Suite'}
+                </span>
+              </>
+            ) : (
+              <span className="text-sm font-mono text-slate-400 block">Ready to run</span>
+            )}
+          </div>
+        </div>
+
+        {/* Interactive 20-Game + SPRT Launcher */}
+        <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-3 text-xs">
+            <label className="flex items-center gap-1.5 text-slate-300 font-mono">
+              <span>Min Games:</span>
+              <select
+                value={selectedMinPairs}
+                onChange={(e) => setSelectedMinPairs(Number(e.target.value))}
+                disabled={Boolean(matchApi?.running)}
+                className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-white"
+              >
+                <option value={10}>20 games (10 pairs) + SPRT</option>
+                <option value={4}>8 games (4 pairs) + SPRT</option>
+                <option value={15}>30 games (15 pairs) + SPRT</option>
+              </select>
+            </label>
+
+            <label className="flex items-center gap-1.5 text-slate-300 font-mono">
+              <span>Threads:</span>
+              <select
+                value={selectedThreads}
+                onChange={(e) => setSelectedThreads(Number(e.target.value))}
+                disabled={Boolean(matchApi?.running)}
+                className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-white"
+              >
+                <option value={1}>1 Thread</option>
+                <option value={2}>2 Threads</option>
+                <option value={4}>4 Threads</option>
+              </select>
+            </label>
+
+            <label className="flex items-center gap-1.5 text-slate-300 font-mono">
+              <span>Hash:</span>
+              <select
+                value={selectedHashMb}
+                onChange={(e) => setSelectedHashMb(Number(e.target.value))}
+                disabled={Boolean(matchApi?.running)}
+                className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-white"
+              >
+                <option value={16}>16 MB</option>
+                <option value={64}>64 MB</option>
+                <option value={128}>128 MB</option>
+                <option value={256}>256 MB</option>
+              </select>
+            </label>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleStartLiveMatch}
+            disabled={startingMatch || Boolean(matchApi?.running)}
+            className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 text-white text-xs font-bold flex items-center gap-2 transition"
+          >
+            {matchApi?.running ? (
+              <>
+                <Zap className="w-3.5 h-3.5 animate-pulse" />
+                <span>
+                  Running ({matchApi.liveProgress?.stats?.games ?? 0} games played)...
+                </span>
+              </>
+            ) : (
+              <>
+                <Play className="w-3.5 h-3.5" />
+                <span>Run 20-Game + SPRT Match vs v0.6.0</span>
+              </>
+            )}
+          </button>
+        </div>
+
+        {matchError && (
+          <div className="text-xs font-mono text-rose-300 bg-rose-950/50 border border-rose-500/40 rounded-lg px-3 py-2">
+            Match notice: {matchError}
+          </div>
+        )}
+      </div>
+
+      {/* OpenBench / Reckless Copyable Match Report */}
+      <div className="bg-slate-900 border border-purple-500/40 rounded-2xl p-6 shadow-xl space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-4">
+          <div>
+            <h3 className="text-lg font-extrabold text-white flex items-center gap-2">
+              <Award className="w-5 h-5 text-purple-400" />
+              OpenBench / Reckless Pentanomial SPRT Report
+            </h3>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Measured results generated by <code className="text-purple-300 font-mono">scripts/run_elo_match.ts</code>
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => handleCopy('report', `${reportBlock}\n\n${matchCommandSnippet}`)}
+            className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-mono text-xs transition flex items-center gap-2 font-bold"
+          >
+            {copiedSection === 'report' ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+            {copiedSection === 'report' ? 'Copied Report!' : 'Copy Match Report'}
+          </button>
+        </div>
+
+        <pre className="p-4 bg-slate-950 rounded-xl border border-slate-800 font-mono text-xs text-emerald-300 overflow-x-auto leading-relaxed">
+          {reportBlock}
         </pre>
+
+        <div className="bg-slate-950 rounded-xl border border-slate-800 p-3 font-mono text-xs text-slate-300 flex flex-wrap items-center justify-between gap-2">
+          <span className="truncate">{matchCommandSnippet}</span>
+          <span className="text-slate-500 flex items-center gap-1">
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+            Pure-PVS vs v0.6.0
+          </span>
+        </div>
       </div>
 
       {/* GitHub Actions Workflow (.yaml) Code Section */}
@@ -443,7 +652,7 @@ g++ -O3 -std=c++17 -march=native berserker_standalone/berserker_engine.cpp -o be
           <div>
             <h3 className="text-base font-bold text-white flex items-center gap-2">
               <Terminal className="w-4 h-4 text-purple-400" />
-              Run Berserker v0.7.1-dev Standalone UCI Engine via CLI
+              Run Berserker v0.7.0 Standalone UCI Engine via CLI
             </h3>
             <p className="text-xs text-slate-400 mt-0.5">
               Execute Berserker directly from your terminal or hook it into CuteChess / Arena / Banksia / Fritz
@@ -495,10 +704,10 @@ g++ -O3 -std=c++17 -march=native berserker_standalone/berserker_engine.cpp -o be
           <div>
             <h3 className="text-base font-bold text-white flex items-center gap-2">
               <Cpu className="w-4 h-4 text-amber-400" />
-              Compile Standalone C++17 Engine
+              Compile Native C++20 Lazy SMP Engine
             </h3>
             <p className="text-xs text-slate-400 mt-0.5">
-              Native binary in <code className="text-amber-300">berserker_standalone/berserker_engine.cpp</code>
+              Native binary built from <code className="text-amber-300">src/engine/cpp/berserker.cpp</code>
             </p>
           </div>
           <button

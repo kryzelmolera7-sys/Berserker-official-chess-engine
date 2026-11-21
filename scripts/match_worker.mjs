@@ -1,20 +1,43 @@
 import { parentPort, workerData } from 'node:worker_threads';
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
 import { Chess } from 'chess.js';
 
 class UciEngineProcess {
-  constructor(scriptPath, searchMode, hashMb = 16, threads = 1) {
-    this.scriptPath = scriptPath;
+  constructor({
+    enginePath,
+    searchMode = null,
+    hashMb = 64,
+    threads = 1,
+    evalFile = null,
+    requireNnue = false,
+  }) {
+    this.enginePath = enginePath;
     this.searchMode = searchMode;
     this.hashMb = hashMb;
     this.threads = threads;
+    this.evalFile = evalFile;
+    this.requireNnue = requireNnue;
     this.proc = null;
     this.buffer = '';
     this.waiter = null;
+    this.nnueLoaded = false;
   }
 
   async start() {
-    this.proc = spawn('node', [this.scriptPath], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const isJs = this.enginePath.endsWith('.js') || this.enginePath.endsWith('.mjs');
+    if (!isJs) {
+      try {
+        fs.chmodSync(this.enginePath, 0o755);
+      } catch {
+        // ignore chmod error if already executable
+      }
+    }
+
+    this.proc = isJs
+      ? spawn('node', [this.enginePath], { stdio: ['pipe', 'pipe', 'pipe'] })
+      : spawn(this.enginePath, [], { stdio: ['pipe', 'pipe', 'pipe'] });
+
     this.proc.stdout.on('data', (chunk) => {
       this.buffer += chunk.toString();
       this._processLines();
@@ -22,13 +45,22 @@ class UciEngineProcess {
     this.proc.stderr.on('data', () => {
       // Ignore informational stderr
     });
+
     await this.sendAndWait('uci', (line) => line === 'uciok');
     this.send(`setoption name Threads value ${this.threads}`);
     this.send(`setoption name Hash value ${this.hashMb}`);
     if (this.searchMode) {
       this.send(`setoption name SearchMode value ${this.searchMode}`);
     }
-    await this.sendAndWait('isready', (line) => line === 'readyok');
+    if (this.evalFile && typeof this.evalFile === 'string') {
+      this.send(`setoption name EvalFile value ${this.evalFile}`);
+    }
+    const readyLines = await this.sendAndWait('isready', (line) => line === 'readyok', 20000);
+    this.nnueLoaded =
+      this.nnueLoaded || readyLines.some((l) => l.includes('NNUE loaded:'));
+    if (this.requireNnue && !this.nnueLoaded) {
+      throw new Error(`Candidate engine ${this.enginePath} did not confirm NNUE loaded on isready`);
+    }
   }
 
   send(cmd) {
@@ -42,6 +74,9 @@ class UciEngineProcess {
     while ((idx = this.buffer.indexOf('\n')) !== -1) {
       const line = this.buffer.slice(0, idx).trim();
       this.buffer = this.buffer.slice(idx + 1);
+      if (line.includes('NNUE loaded:')) {
+        this.nnueLoaded = true;
+      }
       if (this.waiter) {
         this.waiter.lines.push(line);
         if (this.waiter.predicate(line)) {
@@ -54,13 +89,17 @@ class UciEngineProcess {
     }
   }
 
-  sendAndWait(cmd, predicate, timeoutMs = 15000) {
+  sendAndWait(cmd, predicate, timeoutMs = 20000) {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         if (this.waiter) {
           const lines = this.waiter.lines;
           this.waiter = null;
-          reject(new Error(`Timeout waiting for ${this.scriptPath} after "${cmd}". Lines: ${lines.slice(-3).join(' | ')}`));
+          reject(
+            new Error(
+              `Timeout waiting for ${this.enginePath} after "${cmd}". Lines: ${lines.slice(-3).join(' | ')}`
+            )
+          );
         }
       }, timeoutMs);
 
@@ -70,7 +109,7 @@ class UciEngineProcess {
         resolve: (lines) => {
           clearTimeout(timer);
           resolve(lines);
-        }
+        },
       };
       this.send(cmd);
     });
@@ -82,14 +121,15 @@ class UciEngineProcess {
   }
 
   async search(fen, moveHistoryUci, wtimeMs, btimeMs, wincMs, bincMs) {
-    const posCmd = moveHistoryUci.length > 0
-      ? `position fen ${fen} moves ${moveHistoryUci.join(' ')}`
-      : `position fen ${fen}`;
+    const posCmd =
+      moveHistoryUci.length > 0
+        ? `position fen ${fen} moves ${moveHistoryUci.join(' ')}`
+        : `position fen ${fen}`;
     this.send(posCmd);
-    const goCmd = `go wtime ${Math.max(10, Math.round(wtimeMs))} btime ${Math.max(10, Math.round(btimeMs))} winc ${Math.round(wincMs)} binc ${Math.round(bincMs)}`;
+    const goCmd = `go wtime ${Math.max(50, Math.round(wtimeMs))} btime ${Math.max(50, Math.round(btimeMs))} winc ${Math.round(wincMs)} binc ${Math.round(bincMs)}`;
 
     const t0 = performance.now();
-    const lines = await this.sendAndWait(goCmd, (line) => line.startsWith('bestmove '), 15000);
+    const lines = await this.sendAndWait(goCmd, (line) => line.startsWith('bestmove '), 20000);
     const elapsedMs = Math.max(1, Math.round(performance.now() - t0));
 
     let bestMoveUci = '0000';
@@ -140,7 +180,7 @@ async function playSingleGame({ whiteEngine, blackEngine, startFen, baseMs, incM
   let winAdjBlackCount = 0;
   let drawAdjCount = 0;
 
-  while (plies < 220) {
+  while (plies < 180) {
     if (chess.isCheckmate()) {
       return { whiteScore: chess.turn() === 'w' ? 0 : 1, reason: 'checkmate', plies };
     }
@@ -176,7 +216,7 @@ async function playSingleGame({ whiteEngine, blackEngine, startFen, baseMs, incM
       applied = chess.move({
         from: uci.slice(0, 2),
         to: uci.slice(2, 4),
-        promotion: uci[4] || undefined
+        promotion: uci[4] || undefined,
       });
     } catch {
       applied = null;
@@ -189,14 +229,14 @@ async function playSingleGame({ whiteEngine, blackEngine, startFen, baseMs, incM
     moveHistoryUci.push(uci);
     plies++;
 
-    // Sound White-perspective score for adjudication
+    // White-perspective score for adjudication
     const whitePerspectiveCp = turn === 'w' ? res.scoreCp : -res.scoreCp;
 
-    if (plies >= 40) {
-      if (whitePerspectiveCp >= 650) {
+    if (plies >= 24) {
+      if (whitePerspectiveCp >= 600) {
         winAdjWhiteCount++;
         winAdjBlackCount = 0;
-      } else if (whitePerspectiveCp <= -650) {
+      } else if (whitePerspectiveCp <= -600) {
         winAdjBlackCount++;
         winAdjWhiteCount = 0;
       } else {
@@ -204,17 +244,17 @@ async function playSingleGame({ whiteEngine, blackEngine, startFen, baseMs, incM
         winAdjBlackCount = 0;
       }
 
-      if (winAdjWhiteCount >= 5) {
+      if (winAdjWhiteCount >= 4) {
         return { whiteScore: 1, reason: 'win-adjudication', plies };
       }
-      if (winAdjBlackCount >= 5) {
+      if (winAdjBlackCount >= 4) {
         return { whiteScore: 0, reason: 'win-adjudication', plies };
       }
     }
 
-    if (plies >= 110 && Math.abs(whitePerspectiveCp) <= 15) {
+    if (plies >= 80 && Math.abs(whitePerspectiveCp) <= 15) {
       drawAdjCount++;
-      if (drawAdjCount >= 10) {
+      if (drawAdjCount >= 8) {
         return { whiteScore: 0.5, reason: 'draw-adjudication', plies };
       }
     } else {
@@ -231,58 +271,82 @@ async function runWorker() {
     baselinePath,
     candidateSearchMode,
     baselineSearchMode,
+    candidateEvalFile,
     hashMb,
     threads,
     baseMs,
     incMs,
-    assignedPairs
   } = workerData;
 
-  const candidate = new UciEngineProcess(candidatePath, candidateSearchMode, hashMb, threads);
-  const baseline = new UciEngineProcess(baselinePath, baselineSearchMode, hashMb, threads);
+  const candidate = new UciEngineProcess({
+    enginePath: candidatePath,
+    searchMode: candidateSearchMode,
+    hashMb,
+    threads,
+    evalFile: candidateEvalFile,
+    requireNnue: Boolean(candidateEvalFile),
+  });
+  const baseline = new UciEngineProcess({
+    enginePath: baselinePath,
+    searchMode: baselineSearchMode,
+    hashMb,
+    threads,
+  });
 
   await candidate.start();
   await baseline.start();
 
-  try {
-    for (const pair of assignedPairs) {
-      // Game 1: Candidate White vs Baseline Black
-      const g1 = await playSingleGame({
-        whiteEngine: candidate,
-        blackEngine: baseline,
-        startFen: pair.fen,
-        baseMs,
-        incMs
-      });
-
-      // Game 2: Baseline White vs Candidate Black (reversed colors, same opening)
-      const g2 = await playSingleGame({
-        whiteEngine: baseline,
-        blackEngine: candidate,
-        startFen: pair.fen,
-        baseMs,
-        incMs
-      });
-
-      const candG1 = g1.whiteScore;
-      const candG2 = 1 - g2.whiteScore;
-
-      parentPort.postMessage({
-        type: 'pair-complete',
-        pairIndex: pair.index,
-        openingName: pair.name,
-        game1Score: candG1,
-        game2Score: candG2,
-        game1Reason: g1.reason,
-        game2Reason: g2.reason,
-        game1Plies: g1.plies,
-        game2Plies: g2.plies
-      });
-    }
-  } finally {
+  const cleanup = () => {
     candidate.stop();
     baseline.stop();
-  }
+  };
+
+  let busy = false;
+  parentPort.on('message', async (msg) => {
+    if (msg.type === 'shutdown') {
+      cleanup();
+      process.exit(0);
+    }
+
+    if (msg.type === 'run-pair') {
+      if (busy) return;
+      busy = true;
+      try {
+        const pair = msg.pair;
+        const g1 = await playSingleGame({
+          whiteEngine: candidate,
+          blackEngine: baseline,
+          startFen: pair.fen,
+          baseMs,
+          incMs,
+        });
+        const g2 = await playSingleGame({
+          whiteEngine: baseline,
+          blackEngine: candidate,
+          startFen: pair.fen,
+          baseMs,
+          incMs,
+        });
+        parentPort.postMessage({
+          type: 'pair-complete',
+          pairIndex: pair.index,
+          openingName: pair.name,
+          game1Score: g1.whiteScore,
+          game2Score: 1 - g2.whiteScore,
+          game1Reason: g1.reason,
+          game2Reason: g2.reason,
+          game1Plies: g1.plies,
+          game2Plies: g2.plies,
+        });
+      } catch (err) {
+        parentPort.postMessage({ type: 'error', message: err.stack || err.message });
+      } finally {
+        busy = false;
+      }
+    }
+  });
+
+  parentPort.postMessage({ type: 'ready' });
 }
 
 runWorker().catch((err) => {

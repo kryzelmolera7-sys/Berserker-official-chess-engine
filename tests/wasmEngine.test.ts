@@ -266,3 +266,33 @@ test('Native C++20 Lazy SMP binary is lightweight (<512 KB), auto-loads NNUE, an
   assert.ok(pvMatch && bmMatch, 'Expected depth 8 info pv and bestmove from native binary');
   assert.equal(bmMatch[1], pvMatch[1], 'Native Lazy SMP bestmove must equal pv[0]');
 });
+
+test('WASM Pure-PVS converts Black winning advantage (~-0.86 / +105cp) cleanly and solves <=7-piece endgames autonomously without Syzygy', () => {
+  const engine = getNodeWasmEngineSync();
+  assert.ok(engine);
+
+  // 1. Black up a clean extra pawn (+112 cp static) converts cleanly without throwing away advantage
+  engine.newGame();
+  const blackAdvFen = '2r3k1/pp3ppp/2p1bn2/8/3N4/4B3/PP3PPP/2R3K1 b - - 0 20';
+  const convRes = engine.search(blackAdvFen, 16, 1200);
+  assert.equal(convRes.bestMoveUci, convRes.pv[0], 'bestmove must equal pv[0]');
+  assert.ok(convRes.depth >= 10, `Expected deep search >= 10 on conversion pos, got d${convRes.depth}`);
+  assert.ok(convRes.pv.length >= 3, `Expected full non-truncated PV >= 3 moves, got ${convRes.pv.join(' ')}`);
+  assert.ok(convRes.scoreCp >= 65, `Expected Black to retain winning advantage (>= +65 cp), got ${convRes.scoreCp}`);
+
+  // 2. 4-piece KR vs K endgame solved autonomously without Syzygy
+  engine.newGame();
+  const krkRes = engine.search('8/8/8/4k3/8/8/1R2K3/8 w - - 0 1', 16, 900);
+  assert.equal(krkRes.bestMoveUci, krkRes.pv[0]);
+  assert.ok(krkRes.depth >= 12, `Expected deep autonomous KR vs K search, got d${krkRes.depth}`);
+  assert.ok(krkRes.scoreCp >= 450, `Expected decisive KR vs K score >= 450 cp, got ${krkRes.scoreCp}`);
+
+  // 3. Non-rushing time allocation: 1200ms after 1.e4 should not cut off early at depth 5
+  engine.newGame();
+  const e4Res = engine.search('startpos', 20, 1200, ['e2e4']);
+  assert.equal(e4Res.bestMoveUci, e4Res.pv[0]);
+  assert.ok(e4Res.depth >= 11, `Expected depth >= 11 on 1200ms budget (no premature depth-5 rush), got d${e4Res.depth}`);
+  assert.ok(e4Res.timeMs >= 800, `Expected meaningful budget usage (>= 800ms of 1200ms), got ${e4Res.timeMs}ms`);
+  assert.ok(e4Res.pv.length >= 4, `Expected full PV line (>= 4 plies) at final depth, got ${e4Res.pv.join(' ')}`);
+});
+

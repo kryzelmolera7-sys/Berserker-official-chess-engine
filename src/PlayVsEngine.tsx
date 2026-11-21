@@ -24,7 +24,6 @@ import {
   Activity,
   Copy,
   Check,
-  Database,
   Cloud,
   BookOpen,
   Crown,
@@ -32,7 +31,6 @@ import {
   Swords,
   Sliders
 } from 'lucide-react';
-import { probeTablebase, TablebaseResult, countPieces } from './tablebaseService';
 import { saveGameRecord } from './firebaseService';
 import {
   getOpeningBookMove,
@@ -113,6 +111,7 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
     stopSearch: stopWasmSearch,
     sendCommand: sendWasmCommand,
     clearLogs: clearWasmLogs,
+    setContempt: setWasmContempt,
     bestMoveRef: wasmBestMoveRef,
     searchInfoRef: wasmSearchInfoRef,
     multiPvCandidatesRef: wasmMultiPvCandidatesRef
@@ -163,11 +162,7 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
   const [currentBookEntry, setCurrentBookEntry] = useState<OpeningBookEntry | null>(() => getOpeningBookMove(chess.fen()));
   const [activeKingSafety, setActiveKingSafety] = useState<KingSafetyMetrics | null>(null);
   const [lastBlendedMove, setLastBlendedMove] = useState<BlendedMoveResult | null>(null);
-  const [contemptFactor, setContemptFactor] = useState<number>(45);
-
-  // Syzygy 7-Piece Endgame Tablebase state
-  const [tablebaseInfo, setTablebaseInfo] = useState<TablebaseResult | null>(null);
-  const [isTablebaseProbing, setIsTablebaseProbing] = useState<boolean>(false);
+  const [contemptFactor, setContemptFactor] = useState<number>(25);
 
   // Level 2 Cloud Persistence State
   const [cloudSavedNotice, setCloudSavedNotice] = useState<boolean>(false);
@@ -203,25 +198,12 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
     }
   }, [moveHistory]);
 
-  // Syzygy 7-Piece Tablebase Probing Trigger:
-  // Whenever the board has <= 7 pieces, probe the tablebase for mathematical certainty
+  // Sync TacticalContempt option with WASM worker when ready or adjusted
   useEffect(() => {
-    const pieces = countPieces(fen);
-    if (pieces <= 7 && !chess.isGameOver()) {
-      setIsTablebaseProbing(true);
-      probeTablebase(fen)
-        .then((res) => {
-          setTablebaseInfo(res);
-          setIsTablebaseProbing(false);
-        })
-        .catch(() => {
-          setIsTablebaseProbing(false);
-        });
-    } else {
-      setTablebaseInfo(null);
-      setIsTablebaseProbing(false);
+    if (isWasmReady) {
+      setWasmContempt(contemptFactor);
     }
-  }, [fen, chess]);
+  }, [isWasmReady, contemptFactor, setWasmContempt]);
 
   // Turn management: Check if it's engine's turn
   const isEngineTurn = chess.turn() !== playerColor && !chess.isGameOver();
@@ -300,30 +282,7 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
       scoreCp: wasmSearchInfoRef.current?.scoreCp ?? evalCp,
     };
 
-    // 0. PRIORITY 0: SYZYGY 7-PIECE ENDGAME TABLEBASE (<= 7 pieces)
-    if (countPieces(activeFen) <= 7 && tablebaseInfo && tablebaseInfo.bestMoveUci) {
-      try {
-        const uci = tablebaseInfo.bestMoveUci;
-        const tbMove = chess.move({
-          from: uci.slice(0, 2),
-          to: uci.slice(2, 4),
-          promotion: uci[4] || 'q'
-        });
-        if (tbMove) {
-          chosenMove = tbMove;
-          finalTelemetry = { ...finalTelemetry, pv: uci };
-          setLastBlendedMove({
-            chosenMoveUci: uci,
-            chosenMoveSan: tbMove.san,
-            reason: 'fallback'
-          });
-        }
-      } catch {
-        chosenMove = null;
-      }
-    }
-
-    // 1. PRIORITY 1: BERSERKER C++20 WASM + 138.4MB EMBEDDED NNUE ENGINE MOVE (matches pv[0])
+    // 1. PRIORITY 1: BERSERKER C++20 WASM + 138.4MB NNUE ENGINE MOVE (matches pv[0])
     if (!chosenMove) {
       const pvFirst = (wasmSearchInfoRef.current?.pv || '').trim().split(/\s+/)[0] || '';
       const wasmMove =
@@ -459,10 +418,15 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
     }, 350);
   };
 
-  // Trigger Native C++20 WASM + 138.4MB Embedded NNUE Search when it becomes Engine's Turn
+  // Trigger Native C++20 WASM + 138.4MB Auto-Loaded NNUE Search when it becomes Engine's Turn
   useEffect(() => {
     if (!isEngineTurn || gameResult) return;
     if (moveDispatchedForFenRef.current === fen) return;
+    if (!isNnueReady) {
+      setIsEngineThinking(true);
+      setThinkingCountdown(thinkingTimeSec);
+      return;
+    }
 
     setIsEngineThinking(true);
     setThinkingCountdown(thinkingTimeSec);
@@ -472,11 +436,11 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
     setLiveSeldepth(0);
     setLivePv('');
 
-    const searchMoveTime = Math.max(400, Math.round(thinkingTimeSec * 1000 - 150));
+    const searchMoveTime = Math.max(500, Math.round(thinkingTimeSec * 1000));
     startWasmSearch(chess.fen(), searchMoveTime, uciMovesRef.current);
 
     const startTime = Date.now();
-    const safetyDeadlineSec = Math.max(thinkingTimeSec + 6, 10);
+    const safetyDeadlineSec = Math.max(thinkingTimeSec + 8, 12);
 
     const interval = setInterval(() => {
       const elapsed = (Date.now() - startTime) / 1000;
@@ -511,7 +475,7 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
       }
       stopWasmSearch();
     };
-  }, [fen, isEngineTurn, gameResult, playerColor, thinkingTimeSec]);
+  }, [fen, isEngineTurn, gameResult, playerColor, thinkingTimeSec, isNnueReady]);
 
   // Immediately play the exact bestmove emitted by WASM so board move === pv[0]
   useEffect(() => {
@@ -831,14 +795,20 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
                   {isEngineThinking ? (
                     <div className="flex items-center gap-2 bg-purple-500/15 border border-purple-500/30 px-3 py-1.5 rounded-lg text-purple-200 font-mono text-xs font-bold shadow-sm">
                       <div className="w-2 h-2 rounded-full bg-purple-400 animate-ping" />
-                      <span>Thinking: {thinkingCountdown}s</span>
-                      <button
-                        onClick={handleForceMoveNow}
-                        className="ml-2 px-2 py-0.5 bg-purple-600 hover:bg-purple-500 text-white rounded text-[10px] uppercase font-bold tracking-wider transition"
-                        title="Force immediate engine move"
-                      >
-                        Play Now
-                      </button>
+                      <span>
+                        {!isNnueReady
+                          ? `Loading NNUE${nnueProgress !== null ? ` (${nnueProgress}%)` : '...'}`
+                          : `Thinking: ${thinkingCountdown}s`}
+                      </span>
+                      {isNnueReady && (
+                        <button
+                          onClick={handleForceMoveNow}
+                          className="ml-2 px-2 py-0.5 bg-purple-600 hover:bg-purple-500 text-white rounded text-[10px] uppercase font-bold tracking-wider transition"
+                          title="Force immediate engine move"
+                        >
+                          Play Now
+                        </button>
+                      )}
                     </div>
                   ) : (
                     <div className="text-right">
@@ -1264,70 +1234,6 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
                     </div>
                   </div>
                 </div>
-              </div>
-
-              {/* Syzygy 7-Piece Endgame Tablebase Probe Card */}
-              <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <Database className="w-4 h-4 text-cyan-400" />
-                    <span className="text-xs font-bold text-slate-200 uppercase tracking-wider">
-                      Syzygy 7-Piece Tablebase
-                    </span>
-                  </div>
-                  {tablebaseInfo ? (
-                    <span className="text-[10px] font-mono font-bold text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/30 flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-                      THEORETICAL TRUTH
-                    </span>
-                  ) : countPieces(fen) <= 7 ? (
-                    <span className="text-[10px] font-mono text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/30">
-                      PROBING {countPieces(fen)}-MAN...
-                    </span>
-                  ) : (
-                    <span className="text-[10px] font-mono text-slate-500 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
-                      STANDBY (&le;7 PIECES)
-                    </span>
-                  )}
-                </div>
-
-                {tablebaseInfo ? (
-                  <div className="space-y-2 text-xs">
-                    <div className="p-2.5 rounded-lg bg-slate-900/90 border border-slate-800/80 flex items-center justify-between">
-                      <div>
-                        <span className="text-[10px] uppercase font-mono text-slate-400 block">Endgame Assessment</span>
-                        <span className={`font-mono font-bold text-sm ${
-                          tablebaseInfo.category === 'win' 
-                            ? 'text-emerald-400' 
-                            : tablebaseInfo.category === 'loss' 
-                              ? 'text-rose-400' 
-                              : 'text-amber-400'
-                        }`}>
-                          {tablebaseInfo.evalText}
-                        </span>
-                      </div>
-                      <div className="text-right">
-                        <span className="text-[10px] uppercase font-mono text-slate-400 block">DTZ / WDL</span>
-                        <span className="font-mono text-xs text-slate-200">
-                          {tablebaseInfo.dtz !== null ? `DTZ ${tablebaseInfo.dtz}` : 'Exact'} • WDL {tablebaseInfo.wdl}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="p-2 rounded-lg bg-cyan-950/20 border border-cyan-800/30 flex items-center justify-between text-[11px] font-mono">
-                      <span className="text-cyan-300">Theoretical Best Move:</span>
-                      <span className="text-white font-bold px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300">
-                        {tablebaseInfo.bestMoveSan || tablebaseInfo.bestMoveUci}
-                      </span>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-[11px] text-slate-500 italic">
-                    {countPieces(fen) <= 7 
-                      ? 'Contacting Syzygy 7-piece tablebase server for mathematical resolution...' 
-                      : `Currently ${countPieces(fen)} pieces on board. Syzygy 7-man oracle activates automatically when \u22647 pieces remain.`}
-                  </p>
-                )}
               </div>
 
               {/* Permanent Integrated Architecture Card (No Toggles Needed) */}

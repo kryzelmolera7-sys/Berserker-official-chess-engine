@@ -830,7 +830,7 @@ struct Board {
         int hits = 0;
         for (int dist = 2; dist <= lookback; dist += 2) {
             if (rep_hash[start - dist] == cur) {
-                if (ply > 0) return true;
+                if (dist <= ply) return true;
                 if (++hits >= 2) return true;
             }
         }
@@ -2097,12 +2097,14 @@ struct SearchConfig {
     double max_time_ms;
     bool infinite;
     int target_depth;
+    int root_turn;
     int completed_best_move;
     int completed_score;
     int completed_depth;
     uint16_t completed_pv[MAX_PLY];
     int completed_pv_len;
     uint16_t last_root_move;
+    int stable_base_score;
     int stable_count;
     int current_depth;
     bool active;
@@ -2186,13 +2188,16 @@ struct SearchWorker {
         int us = board.turn;
         int pidx = (int)(board.pawn_key & 16383ULL);
         int npidx = (int)(board.nonpawn_key & 16383ULL);
-        int corr = (pawn_corr[us][pidx] * 2 + nonpawn_corr[us][npidx]) / 64;
+        int corr = (pawn_corr[us][pidx] * 2 + nonpawn_corr[us][npidx]) / 128;
         int v = raw_cp + corr;
         if (g_contempt != 0) {
-            v += (us == WHITE ? g_contempt : -g_contempt) / 4;
+            v += (us == g_sc.root_turn ? g_contempt : -g_contempt) / 4;
         }
-        if (board.halfmove > 20) {
-            v = (v * (200 - (int)board.halfmove)) / 200;
+        // Only apply secondary 50-move rule damping near the actual 50-move boundary (>= 75)
+        // so normal middlegame/endgame conversion (-0.86 etc.) retains full winning drive.
+        if (board.halfmove >= 75) {
+            int rem = max_i(0, 108 - (int)board.halfmove);
+            v = (v * rem) / 33;
         }
         return clamp_i(v, -MATE_BOUND + 1, MATE_BOUND - 1);
     }
@@ -2293,11 +2298,11 @@ struct SearchWorker {
             }
             if (stand_pat > alpha) alpha = stand_pat;
             best = stand_pat;
-            futility_base = stand_pat + 160;
+            futility_base = stand_pat + 185;
         }
 
-        // In check: generate all moves for evasions; at qdepth == 0: generate all moves so checks are inspected cleanly
-        bool caps_only = !in_check && (qdepth > 0);
+        // In check: generate all evasions; otherwise captures + queen promotions for high NPS
+        bool caps_only = !in_check;
         int count = board.gen_pseudo(ply, caps_only);
         uint16_t* list = board.move_list[ply];
         int* scores = board.move_scores[ply];
@@ -2310,11 +2315,7 @@ struct SearchWorker {
             bool is_cap = (mtype == MT_EN_PASSANT) || (mtype != MT_CASTLING && board.mailbox[to] != EMPTY_SQ);
             if (!in_check) {
                 if (!is_cap && promo != PT_QUEEN) {
-                    if (qdepth == 0 && board.gives_check(m)) {
-                        scores[i] = 50000 + history[board.turn][mv_from(m)][to];
-                    } else {
-                        scores[i] = -1000000;
-                    }
+                    scores[i] = -1000000;
                     continue;
                 }
                 int victim = (mtype == MT_EN_PASSANT) ? PT_PAWN : (is_cap ? (board.mailbox[to] >> 1) : -1);
@@ -2341,15 +2342,14 @@ struct SearchWorker {
             uint16_t m = list[i];
             if (!in_check && best_s <= -1000000) break;
 
-            bool check_mv = !in_check ? board.gives_check(m) : false;
             if (!in_check) {
                 int promo = mv_promo(m), mtype = mv_type(m), to = mv_to(m);
-                if (!check_mv && promo != PT_QUEEN && has_np && futility_base > -MATE_BOUND) {
+                if (promo != PT_QUEEN && has_np && futility_base > -MATE_BOUND) {
                     int victim_val = (mtype == MT_EN_PASSANT) ? SEE_VALUES[PT_PAWN]
                                    : (board.mailbox[to] != EMPTY_SQ ? SEE_VALUES[board.mailbox[to] >> 1] : 0);
-                    if (futility_base + victim_val <= alpha) continue;
+                    if (futility_base + victim_val <= alpha && !board.gives_check(m)) continue;
                 }
-                if (board.static_exchange_eval(m) < (check_mv ? -50 : 0)) continue;
+                if (board.static_exchange_eval(m) < 0) continue;
             }
 
             if (!make_move(board, m, &nnue)) continue;
@@ -2383,12 +2383,11 @@ struct SearchWorker {
         return best;
     }
 
-    int pvs(int depth, int ply, int alpha, int beta, uint16_t excluded_move, bool cutnode) {
+    int pvs(int depth, int ply, int alpha, int beta, uint16_t excluded_move, bool cutnode, bool is_pv) {
         if (ply < MAX_PLY) pv_len[ply] = 0;
         if (check_abort()) return alpha;
 
         bool is_root = (ply == 0);
-        bool is_pv = (beta - alpha > 1);
         bool in_check = board.in_check();
 
         if (depth <= 0) return quiescence(alpha, beta, ply, 0, is_pv);
@@ -2456,36 +2455,39 @@ struct SearchWorker {
         }
 
         if (!is_pv && !in_check && excluded_move == 0) {
-            // Reverse Futility Pruning (improving-aware)
-            if (depth <= 8 && abs_i(beta) < MATE_BOUND) {
-                int margin = (75 - 12 * (int)improving) * depth;
-                if (static_eval - margin >= beta) return (static_eval + beta) / 2;
+            // Reverse Futility Pruning (improving-aware, never prune TT-PV nodes)
+            if (!tt_pv && depth <= 7 && abs_i(beta) < MATE_BOUND) {
+                int margin = (90 - 20 * (int)improving) * depth;
+                if (static_eval - margin >= beta) {
+                    return beta + (static_eval - margin - beta) / 3;
+                }
             }
 
             // Razoring
-            if (depth <= 2 && abs_i(alpha) < MATE_BOUND && static_eval + 240 * depth <= alpha) {
+            if (!tt_pv && depth <= 2 && abs_i(alpha) < MATE_BOUND && static_eval + 260 + 180 * depth <= alpha) {
                 int qs = quiescence(alpha, alpha + 1, ply, 0, false);
                 if (aborted) return alpha;
                 if (qs <= alpha) return qs;
             }
 
-            // Null Move Pruning with Zugzwang verification at high depth
+            // Null Move Pruning with Zugzwang verification in deep searches or low-material endgames
             if (depth >= 3 && static_eval >= beta && abs_i(beta) < MATE_BOUND &&
                 ply >= nmp_min_ply && (ply == 0 || moved_piece[ply - 1] != -1) &&
                 board.has_non_pawn(us)) {
+                int np_cnt = popcnt64(board.colors[us] & ~(board.pieces[(PT_PAWN << 1) | us] | board.pieces[(PT_KING << 1) | us]));
                 int r = 3 + depth / 4 + min_i((static_eval - beta) / 200, 2);
                 if (ply < MAX_PLY) { moved_piece[ply] = -1; move_to[ply] = -1; }
                 make_null_move(board, &nnue);
-                int ns = -pvs(depth - 1 - r, ply + 1, -beta, -beta + 1, 0, !cutnode);
+                int ns = -pvs(depth - 1 - r, ply + 1, -beta, -beta + 1, 0, !cutnode, false);
                 unmake_null_move(board, &nnue);
                 if (aborted) return alpha;
                 if (ns >= beta) {
                     if (ns >= MATE_BOUND) ns = beta;
-                    if (depth < 12 || nmp_min_ply > 0) return ns;
+                    if ((depth < 10 && np_cnt > 1) || nmp_min_ply > 0) return ns;
                     // Verification search to prevent Zugzwang unsoundness
                     int saved_min = nmp_min_ply;
                     nmp_min_ply = ply + (3 * (depth - r)) / 4;
-                    int vs = pvs(depth - r, ply, beta - 1, beta, 0, false);
+                    int vs = pvs(depth - r, ply, beta - 1, beta, 0, false, false);
                     nmp_min_ply = saved_min;
                     if (aborted) return alpha;
                     if (vs >= beta) return ns;
@@ -2520,7 +2522,7 @@ struct SearchWorker {
                     if (ply < MAX_PLY) { moved_piece[ply] = board.mailbox[mv_to(pm)]; move_to[ply] = mv_to(pm); }
                     int psc = -quiescence(-pc_beta, -pc_beta + 1, ply + 1, 0, false);
                     if (!aborted && psc >= pc_beta) {
-                        psc = -pvs(depth - 4, ply + 1, -pc_beta, -pc_beta + 1, 0, !cutnode);
+                        psc = -pvs(depth - 4, ply + 1, -pc_beta, -pc_beta + 1, 0, !cutnode, false);
                     }
                     unmake_move(board, &nnue);
                     if (aborted) return alpha;
@@ -2572,16 +2574,19 @@ struct SearchWorker {
             bool is_tactical = is_cap || (promo == PT_QUEEN);
             bool gives_check = board.gives_check(move);
 
-            // Non-PV Pruning: NEVER prune checking moves or tactical sacrifices when in check/winning
+            bool is_pawn_push = ((moved_pc >> 1) == PT_PAWN) &&
+                                ((us == WHITE && (to >> 3) >= 5) || (us == BLACK && (to >> 3) <= 2));
+
+            // Non-PV Pruning: NEVER prune checking moves, tactical sacrifices, or 6th/7th rank pawn pushes
             if (!is_pv && !is_root && !in_check && !gives_check && best_score > -MATE_BOUND) {
-                if (!is_tactical) {
-                    int lmp_limit = (3 + depth * depth) / (2 - (int)improving);
+                if (!is_tactical && !is_pawn_push) {
+                    int lmp_limit = 4 + depth * depth * (1 + (int)improving);
                     if (depth <= 6 && moves_searched >= lmp_limit) continue;
                     int lmr_d = max_i(0, depth - LMR_TABLE[min_i(depth, 63)][min_i(moves_searched, 63)]);
-                    if (lmr_d <= 5 && static_eval + 110 + 95 * lmr_d <= alpha) continue;
-                    if (depth <= 6 && board.static_exchange_eval(move) < -50 * depth) continue;
+                    if (lmr_d <= 5 && static_eval + 135 + 105 * lmr_d <= alpha) continue;
+                    if (depth <= 6 && board.static_exchange_eval(move) < -65 * depth) continue;
                 } else if (is_cap && depth <= 5) {
-                    if (board.static_exchange_eval(move) < -90 * depth) continue;
+                    if (board.static_exchange_eval(move) < -95 * depth) continue;
                 }
             }
 
@@ -2591,7 +2596,34 @@ struct SearchWorker {
                 tt_hit && tt_depth >= depth - 3 && tt_bound != TT_UPPER && abs_i(tt_score) < MATE_BOUND) {
                 int s_beta = max_i(-MATE_BOUND + 1, tt_score - depth * 2);
                 int s_depth = (depth - 1) / 2;
-                int s_sc = pvs(s_depth, ply, s_beta - 1, s_beta, move, cutnode);
+
+                // Preserve outer ply move list, scores, eval_stack, double_exts, and PV before nested SE search at same ply
+                uint16_t saved_moves[MAX_MOVES];
+                int saved_scores[MAX_MOVES];
+                int rem = count - i;
+                for (int k = 0; k < rem; ++k) {
+                    saved_moves[k] = list[i + k];
+                    saved_scores[k] = scores[i + k];
+                }
+                int saved_eval = (ply < MAX_PLY) ? eval_stack[ply] : VALUE_NONE;
+                int saved_dext = (ply < MAX_PLY) ? double_exts[ply] : 0;
+                int saved_pv_len = (ply < MAX_PLY) ? pv_len[ply] : 0;
+                uint16_t saved_pv_row[MAX_PLY];
+                for (int k = 0; k < saved_pv_len; ++k) saved_pv_row[k] = pv_table[ply][k];
+
+                int s_sc = pvs(s_depth, ply, s_beta - 1, s_beta, move, cutnode, false);
+
+                for (int k = 0; k < rem; ++k) {
+                    list[i + k] = saved_moves[k];
+                    scores[i + k] = saved_scores[k];
+                }
+                if (ply < MAX_PLY) {
+                    eval_stack[ply] = saved_eval;
+                    double_exts[ply] = saved_dext;
+                    pv_len[ply] = saved_pv_len;
+                    for (int k = 0; k < saved_pv_len; ++k) pv_table[ply][k] = saved_pv_row[k];
+                }
+
                 if (aborted) return orig_alpha;
                 if (s_sc < s_beta) {
                     if (!is_pv && s_sc < s_beta - 30 && ply < MAX_PLY && double_exts[ply] <= 5) {
@@ -2600,10 +2632,10 @@ struct SearchWorker {
                     } else {
                         ext = 1;
                     }
-                } else if (s_beta >= beta) {
-                    return s_beta; // Multi-Cut
-                } else if (tt_score >= beta && depth >= 8) {
-                    ext = -2; // Negative extension when TT move already fails high
+                } else if (!is_pv && s_beta >= beta) {
+                    return s_beta; // Multi-Cut (non-PV only)
+                } else if (!is_pv && tt_score >= beta && depth >= 8) {
+                    ext = -1; // Conservative negative extension (non-PV only)
                 }
             } else if (gives_check && ply < MAX_PLY - 4 && (in_check || board.static_exchange_eval(move) >= 0) &&
                        (ply < MAX_PLY && double_exts[ply] <= 6)) {
@@ -2623,7 +2655,7 @@ struct SearchWorker {
             int sc;
 
             if (moves_searched == 1) {
-                sc = -pvs(new_depth, ply + 1, -beta, -alpha, 0, false);
+                sc = -pvs(new_depth, ply + 1, -beta, -alpha, 0, false, is_pv);
             } else {
                 int red = 0;
                 if (depth >= 3 && moves_searched >= 3 && !is_tactical && !in_check && !gives_check) {
@@ -2631,6 +2663,7 @@ struct SearchWorker {
                     if (!tt_pv) red++;
                     if (cutnode) red++;
                     if (!improving) red++;
+                    if (is_pawn_push) red--;
                     int hv = history[us][from][to];
                     if (hv > 4096) red--;
                     else if (hv < -4096) red++;
@@ -2639,12 +2672,12 @@ struct SearchWorker {
                     red = 1;
                 }
 
-                sc = -pvs(new_depth - red, ply + 1, -alpha - 1, -alpha, 0, true);
+                sc = -pvs(new_depth - red, ply + 1, -alpha - 1, -alpha, 0, true, false);
                 if (!aborted && sc > alpha && red > 0) {
-                    sc = -pvs(new_depth, ply + 1, -alpha - 1, -alpha, 0, !cutnode);
+                    sc = -pvs(new_depth, ply + 1, -alpha - 1, -alpha, 0, !cutnode, false);
                 }
-                if (!aborted && sc > alpha && sc < beta) {
-                    sc = -pvs(new_depth, ply + 1, -beta, -alpha, 0, false);
+                if (!aborted && is_pv && sc > alpha) {
+                    sc = -pvs(new_depth, ply + 1, -beta, -alpha, 0, false, true);
                 }
             }
 
@@ -2709,16 +2742,18 @@ struct SearchWorker {
         if (!in_check && excluded_move == 0 && best_move != 0 && abs_i(best_score) < MATE_BOUND) {
             int bmtype = mv_type(best_move), bto = mv_to(best_move);
             if (bmtype != MT_EN_PASSANT && (bmtype == MT_CASTLING || board.mailbox[bto] == EMPTY_SQ)) {
-                if ((best_score > static_eval || best_score >= beta) &&
-                    !(best_score < beta && best_score > orig_alpha)) {
-                    // Only update when static eval error sign aligns or bound holds cleanly
+                int c_bound = (best_score <= orig_alpha) ? TT_UPPER : (best_score >= beta) ? TT_LOWER : TT_EXACT;
+                bool corr_ok = (c_bound == TT_EXACT) ||
+                               (c_bound == TT_LOWER && best_score > static_eval) ||
+                               (c_bound == TT_UPPER && best_score < static_eval);
+                if (corr_ok) {
+                    int pidx = (int)(board.pawn_key & 16383ULL);
+                    int npidx = (int)(board.nonpawn_key & 16383ULL);
+                    int err = clamp_i(best_score - raw_eval, -256, 256);
+                    int w = min_i(16, depth + 1);
+                    pawn_corr[us][pidx] = (int16_t)clamp_i((pawn_corr[us][pidx] * (256 - w) + err * 16 * w) / 256, -2048, 2048);
+                    nonpawn_corr[us][npidx] = (int16_t)clamp_i((nonpawn_corr[us][npidx] * (256 - w) + err * 12 * w) / 256, -2048, 2048);
                 }
-                int pidx = (int)(board.pawn_key & 16383ULL);
-                int npidx = (int)(board.nonpawn_key & 16383ULL);
-                int err = clamp_i(best_score - raw_eval, -256, 256);
-                int w = min_i(16, depth + 1);
-                pawn_corr[us][pidx] = (int16_t)clamp_i((pawn_corr[us][pidx] * (256 - w) + err * 16 * w) / 256, -2048, 2048);
-                nonpawn_corr[us][npidx] = (int16_t)clamp_i((nonpawn_corr[us][npidx] * (256 - w) + err * 12 * w) / 256, -2048, 2048);
             }
         }
 
@@ -2782,11 +2817,23 @@ struct SearchWorker {
 
         int pvs_done = 0;
         for (int pv_idx = 0; pv_idx < lines; ++pv_idx) {
-            // Search unsorted tail [pv_idx .. root_cnt - 1]
-            int delta = 18;
+            // Re-sort remaining root moves [pv_idx .. root_cnt - 1] by previous depth score (with TT boost)
+            if (depth >= 2) {
+                for (int i = pv_idx; i < root_cnt; ++i) {
+                    for (int j = i + 1; j < root_cnt; ++j) {
+                        int si = root_moves[i].prev_score + (root_moves[i].move == tt_move ? 200 : 0);
+                        int sj = root_moves[j].prev_score + (root_moves[j].move == tt_move ? 200 : 0);
+                        if (sj > si) {
+                            RootMove tmp = root_moves[i]; root_moves[i] = root_moves[j]; root_moves[j] = tmp;
+                        }
+                    }
+                }
+            }
+
+            int delta = 22;
             int prev_sc = root_moves[pv_idx].prev_score;
-            int alpha = (depth >= 4) ? max_i(-INF_SCORE, prev_sc - delta) : -INF_SCORE;
-            int beta  = (depth >= 4) ? min_i(INF_SCORE,  prev_sc + delta) : INF_SCORE;
+            int alpha = (depth >= 5) ? max_i(-INF_SCORE, prev_sc - delta) : -INF_SCORE;
+            int beta  = (depth >= 5) ? min_i(INF_SCORE,  prev_sc + delta) : INF_SCORE;
 
             int best_idx = pv_idx;
             int best_value = -INF_SCORE;
@@ -2809,7 +2856,7 @@ struct SearchWorker {
 
                     int sc;
                     if (r == pv_idx) {
-                        sc = -pvs(nd, 1, -beta, -cur_alpha, 0, false);
+                        sc = -pvs(nd, 1, -beta, -cur_alpha, 0, false, true);
                     } else {
                         int red = 0;
                         int mtype = mv_type(rm), mpromo = mv_promo(rm);
@@ -2817,12 +2864,12 @@ struct SearchWorker {
                         if (depth >= 3 && r >= pv_idx + 2 && !cap && mpromo != PT_QUEEN && !gives_check) {
                             red = clamp_i(LMR_TABLE[min_i(depth, 63)][min_i(r - pv_idx + 1, 63)] - 1, 0, max_i(0, nd - 1));
                         }
-                        sc = -pvs(nd - red, 1, -cur_alpha - 1, -cur_alpha, 0, true);
+                        sc = -pvs(nd - red, 1, -cur_alpha - 1, -cur_alpha, 0, true, false);
                         if (!aborted && sc > cur_alpha && red > 0) {
-                            sc = -pvs(nd, 1, -cur_alpha - 1, -cur_alpha, 0, false);
+                            sc = -pvs(nd, 1, -cur_alpha - 1, -cur_alpha, 0, false, false);
                         }
                         if (!aborted && sc > cur_alpha) {
-                            sc = -pvs(nd, 1, -beta, -cur_alpha, 0, false);
+                            sc = -pvs(nd, 1, -beta, -cur_alpha, 0, false, true);
                         }
                     }
 
@@ -2833,6 +2880,7 @@ struct SearchWorker {
                         best_value = sc;
                         best_idx = r;
                         root_moves[r].score = sc;
+                        root_moves[r].prev_score = sc;
                         root_moves[r].pv[0] = rm;
                         int clen = pv_len[1];
                         for (int k = 0; k < clen; ++k) root_moves[r].pv[1 + k] = pv_table[1][k];
@@ -2842,10 +2890,21 @@ struct SearchWorker {
                             cur_alpha = sc;
                         }
                         if (sc >= beta) break;
+                    } else if (sc > -MATE_BOUND) {
+                        root_moves[r].prev_score = sc;
                     }
                 }
 
                 if (aborted) break;
+
+                // Promote newly found best move to pv_idx before widening when beating alpha (never on fail-low)
+                if (best_idx != pv_idx && best_value > alpha) {
+                    RootMove tmp = root_moves[best_idx];
+                    for (int r = best_idx; r > pv_idx; --r) root_moves[r] = root_moves[r - 1];
+                    root_moves[pv_idx] = tmp;
+                    best_idx = pv_idx;
+                }
+
                 if (best_value <= alpha) {
                     beta = (alpha + beta) / 2;
                     alpha = max_i(-INF_SCORE, alpha - delta);
@@ -2864,7 +2923,6 @@ struct SearchWorker {
 
             if (aborted) break;
 
-            // Bring best move of this PV rank to slot pv_idx (so pv_idx+1 skips it)
             if (best_idx != pv_idx) {
                 RootMove tmp = root_moves[best_idx];
                 for (int r = best_idx; r > pv_idx; --r) root_moves[r] = root_moves[r - 1];
@@ -3115,12 +3173,14 @@ int wasm_search_begin(int max_depth, int max_time_ms, bool infinite) {
     g_sc.max_time_ms = max_time_ms < 10 ? 10 : max_time_ms;
     g_sc.infinite = infinite;
     g_sc.target_depth = clamp_i(max_depth, 1, 64);
+    g_sc.root_turn = mw->board.turn;
     g_sc.completed_best_move = mw->root_moves[0].move;
     g_sc.completed_score = mw->raw_eval_node();
     g_sc.completed_depth = 0;
     g_sc.completed_pv[0] = mw->root_moves[0].move;
     g_sc.completed_pv_len = 1;
     g_sc.last_root_move = 0;
+    g_sc.stable_base_score = g_sc.completed_score;
     g_sc.stable_count = 0;
     g_sc.current_depth = 1;
     g_sc.active = true;
@@ -3139,10 +3199,11 @@ int wasm_search_step() {
     }
 
     int d = g_sc.current_depth;
-    // Intelligent early-stop: only after depth >= 5 AND stable best move >= 4 iterations AND past 55% budget
-    if (!g_sc.infinite && d >= 5 && g_sc.completed_depth >= 5 &&
-        (now_ms() - g_sc.start_ms) >= g_sc.max_time_ms * 0.55 &&
-        g_sc.stable_count >= 4) {
+    // Early-stop only on forced single-move at depth >= 4, or deeply converged search (>= 85% budget, depth >= 9, stable >= 5)
+    if (!g_sc.infinite && ((mw->root_cnt == 1 && g_sc.completed_depth >= 4) ||
+        (d >= 9 && g_sc.completed_depth >= 8 &&
+         (now_ms() - g_sc.start_ms) >= g_sc.max_time_ms * 0.85 &&
+         g_sc.stable_count >= 5))) {
         finish_search_and_emit();
         return 0;
     }
@@ -3157,17 +3218,17 @@ int wasm_search_step() {
         int primary_score = out_scores[0];
         int primary_pv_len = out_pv_lens[0];
 
-        int prev_completed_score = g_sc.completed_score;
         g_sc.completed_best_move = primary_move;
         g_sc.completed_score = primary_score;
         g_sc.completed_depth = d;
         g_sc.completed_pv_len = primary_pv_len;
         for (int k = 0; k < primary_pv_len; ++k) g_sc.completed_pv[k] = out_pvs[0][k];
 
-        if (primary_move == g_sc.last_root_move && primary_score >= prev_completed_score - 12) {
+        if (primary_move == g_sc.last_root_move && abs_i(primary_score - g_sc.stable_base_score) <= 15) {
             g_sc.stable_count++;
         } else {
             g_sc.last_root_move = primary_move;
+            g_sc.stable_base_score = primary_score;
             g_sc.stable_count = 0;
         }
 
@@ -3223,9 +3284,10 @@ static void native_run_smp_search(int max_depth, int max_time_ms, bool infinite)
             break;
         }
         int d = g_sc.current_depth;
-        if (!g_sc.infinite && d >= 5 && g_sc.completed_depth >= 5 &&
-            (now_ms() - g_sc.start_ms) >= g_sc.max_time_ms * 0.55 &&
-            g_sc.stable_count >= 4) {
+        if (!g_sc.infinite && ((mw->root_cnt == 1 && g_sc.completed_depth >= 4) ||
+            (d >= 9 && g_sc.completed_depth >= 8 &&
+             (now_ms() - g_sc.start_ms) >= g_sc.max_time_ms * 0.85 &&
+             g_sc.stable_count >= 5))) {
             break;
         }
 
@@ -3245,17 +3307,17 @@ static void native_run_smp_search(int max_depth, int max_time_ms, bool infinite)
             int primary_score = out_scores[0];
             int primary_pv_len = out_pv_lens[0];
 
-            int prev_completed_score = g_sc.completed_score;
             g_sc.completed_best_move = primary_move;
             g_sc.completed_score = primary_score;
             g_sc.completed_depth = d;
             g_sc.completed_pv_len = primary_pv_len;
             for (int k = 0; k < primary_pv_len; ++k) g_sc.completed_pv[k] = out_pvs[0][k];
 
-            if (primary_move == g_sc.last_root_move && primary_score >= prev_completed_score - 12) {
+            if (primary_move == g_sc.last_root_move && abs_i(primary_score - g_sc.stable_base_score) <= 15) {
                 g_sc.stable_count++;
             } else {
                 g_sc.last_root_move = primary_move;
+                g_sc.stable_base_score = primary_score;
                 g_sc.stable_count = 0;
             }
 

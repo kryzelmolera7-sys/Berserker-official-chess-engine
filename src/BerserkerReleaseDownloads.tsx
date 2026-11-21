@@ -382,7 +382,7 @@ const DOWNLOAD_ITEMS: DownloadItem[] = [
     category: 'windows',
     size: '51.6 KB',
     type: 'Universal Runtime (JS / Node / Bun)',
-    description: 'Grandmaster core with Threat-Space Prophylaxis (The Petrosian Patch), Virtual Loss Parallel MCTS, Dynamic Time Manager, Berserker NNUE Dual Policy-Value Head, Progressive SEE Pruning, Syzygy Tablebase Probing, and Dynamic Contempt Profiling. Runs identically on Windows, Linux, macOS, and Android.',
+    description: 'Grandmaster core with Threat-Space Prophylaxis (The Petrosian Patch), Virtual Loss Parallel MCTS, Dynamic Time Manager, Berserker NNUE Dual Policy-Value Head, Progressive SEE Pruning, and Dynamic Contempt Profiling. Runs identically on Windows, Linux, macOS, and Android.',
     sha256: 'c834730fa053de415bdd3b0a7172a861b016e821d5e2192c885bc4de099b0fe2',
     downloadUrl: '/downloads/berserker-v0.6.0-cli.js',
     recommendedFor: 'All Operating Systems (Universal)',

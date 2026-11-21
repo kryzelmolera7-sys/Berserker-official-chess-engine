@@ -50,8 +50,12 @@ function getCliWasmEngine() {
       return null;
     }
     const wasmBytes = fs.readFileSync(wasmPath);
-    const nnuePath = path.resolve(__cliDir, 'public/nnue/v60-7f587dfb.nnue');
-    const nnueBytes = fs.existsSync(nnuePath) ? fs.readFileSync(nnuePath) : null;
+    const candidateNnuePaths = [
+      path.resolve(__cliDir, 'storage/nn-cache/nn-bddd9d57eb87.nnue'),
+      path.resolve(__cliDir, 'nn-bddd9d57eb87.nnue'),
+    ];
+    const nnuePath = candidateNnuePaths.find((p) => fs.existsSync(p)) || null;
+    const nnueBytes = nnuePath ? fs.readFileSync(nnuePath) : null;
 
     let mem = null;
     const mod = new WebAssembly.Module(wasmBytes);

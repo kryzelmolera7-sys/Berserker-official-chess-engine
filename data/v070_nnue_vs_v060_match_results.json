@@ -1,0 +1,164 @@
+{
+  "candidate": "Berserker v0.7.0 (C++20 Pure-PVS + 138.4MB NNUE)",
+  "baseline": "Berserker v0.6.0",
+  "baselineUrl": "https://github.com/kryzelmolera7-sys/Berserker-official-chess-engine/releases/tag/v0.6.0",
+  "nnueFile": "nn-bddd9d57eb87.nnue",
+  "nnueBytes": 138360528,
+  "timeControl": "2.5+0.15s",
+  "threads": 1,
+  "hashMb": 64,
+  "workers": 2,
+  "hostCpuCores": 4,
+  "hostTotalRamMb": 12288,
+  "elapsedSec": 87.9,
+  "hardwareSummary": "1 Thread | 64 MB Hash",
+  "resultSummary": "N: 22 | W: 22 | L: 0 | D: 0",
+  "eloSummary": "+1320.33 +- 0.00 Elo (95%) | Score 100.0% | LOS 100.00%",
+  "reportText": "Elo   | 1320.33 +- 0.00 (95%)\nSPRT  | LLR 7.49 (-2.94, 2.94) [0.00, 10.00] (H1_ACCEPTED)\nConf  | 2.5+0.15s Threads=1 Hash=64MB\nGames | N: 22 W: 22 L: 0 D: 0\nPenta | [0, 0, 0, 0, 11]\nhttps://github.com/kryzelmolera7-sys/Berserker-official-chess-engine/releases/tag/v0.6.0",
+  "stats": {
+    "pairs": 11,
+    "games": 22,
+    "wins": 22,
+    "losses": 0,
+    "draws": 0,
+    "penta": [
+      0,
+      0,
+      0,
+      0,
+      11
+    ],
+    "scoreRate": 1,
+    "elo": 1320.3251176472977,
+    "err95": 0,
+    "los": 1
+  },
+  "sprt": {
+    "elo0": 0,
+    "elo1": 10,
+    "alpha": 0.05,
+    "beta": 0.05,
+    "llr": 7.487141955623803,
+    "lowerBound": -2.9444389791664403,
+    "upperBound": 2.9444389791664403,
+    "status": "H1_ACCEPTED"
+  },
+  "terminations": {
+    "black-time-forfeit": 4,
+    "checkmate": 7,
+    "white-time-forfeit": 10,
+    "win-adjudication": 1
+  },
+  "pairs": [
+    {
+      "pairIndex": 0,
+      "openingName": "Ruy Lopez Closed",
+      "game1Score": 1,
+      "game2Score": 1,
+      "game1Reason": "checkmate",
+      "game2Reason": "white-time-forfeit",
+      "game1Plies": 31,
+      "game2Plies": 44
+    },
+    {
+      "pairIndex": 1,
+      "openingName": "Italian Giuoco Piano",
+      "game1Score": 1,
+      "game2Score": 1,
+      "game1Reason": "black-time-forfeit",
+      "game2Reason": "checkmate",
+      "game1Plies": 33,
+      "game2Plies": 36
+    },
+    {
+      "pairIndex": 2,
+      "openingName": "Sicilian Najdorf",
+      "game1Score": 1,
+      "game2Score": 1,
+      "game1Reason": "black-time-forfeit",
+      "game2Reason": "white-time-forfeit",
+      "game1Plies": 39,
+      "game2Plies": 18
+    },
+    {
+      "pairIndex": 3,
+      "openingName": "Sicilian Dragon",
+      "game1Score": 1,
+      "game2Score": 1,
+      "game1Reason": "black-time-forfeit",
+      "game2Reason": "white-time-forfeit",
+      "game1Plies": 39,
+      "game2Plies": 28
+    },
+    {
+      "pairIndex": 4,
+      "openingName": "Sicilian Classical",
+      "game1Score": 1,
+      "game2Score": 1,
+      "game1Reason": "checkmate",
+      "game2Reason": "white-time-forfeit",
+      "game1Plies": 49,
+      "game2Plies": 18
+    },
+    {
+      "pairIndex": 5,
+      "openingName": "French Winawer",
+      "game1Score": 1,
+      "game2Score": 1,
+      "game1Reason": "win-adjudication",
+      "game2Reason": "white-time-forfeit",
+      "game1Plies": 27,
+      "game2Plies": 18
+    },
+    {
+      "pairIndex": 6,
+      "openingName": "Caro-Kann Classical",
+      "game1Score": 1,
+      "game2Score": 1,
+      "game1Reason": "checkmate",
+      "game2Reason": "white-time-forfeit",
+      "game1Plies": 23,
+      "game2Plies": 26
+    },
+    {
+      "pairIndex": 7,
+      "openingName": "Queens Gambit Declined",
+      "game1Score": 1,
+      "game2Score": 1,
+      "game1Reason": "checkmate",
+      "game2Reason": "white-time-forfeit",
+      "game1Plies": 37,
+      "game2Plies": 12
+    },
+    {
+      "pairIndex": 8,
+      "openingName": "Slav Defense",
+      "game1Score": 1,
+      "game2Score": 1,
+      "game1Reason": "checkmate",
+      "game2Reason": "white-time-forfeit",
+      "game1Plies": 35,
+      "game2Plies": 18
+    },
+    {
+      "pairIndex": 9,
+      "openingName": "Nimzo-Indian Rubinstein",
+      "game1Score": 1,
+      "game2Score": 1,
+      "game1Reason": "checkmate",
+      "game2Reason": "white-time-forfeit",
+      "game1Plies": 21,
+      "game2Plies": 22
+    },
+    {
+      "pairIndex": 10,
+      "openingName": "Kings Indian Classical",
+      "game1Score": 1,
+      "game2Score": 1,
+      "game1Reason": "black-time-forfeit",
+      "game2Reason": "white-time-forfeit",
+      "game1Plies": 45,
+      "game2Plies": 24
+    }
+  ]
+}

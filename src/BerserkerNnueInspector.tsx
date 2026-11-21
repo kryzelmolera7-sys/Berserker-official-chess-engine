@@ -69,7 +69,7 @@ const PRESET_FENS: PresetFen[] = [
     name: 'King Walk Pawn Ending (Minimalist Dual Accumulator)',
     category: 'Endgame',
     fen: '8/5k2/8/4p3/3P4/8/5K2/8 w - - 0 45',
-    description: 'Technical endgame testing dual accumulator norms and tablebase convergence.',
+    description: 'Technical endgame testing dual accumulator norms and endgame NNUE convergence.',
   },
 ];
 
