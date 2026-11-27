@@ -296,3 +296,88 @@ test('WASM Pure-PVS converts Black winning advantage (~-0.86 / +105cp) cleanly a
   assert.ok(e4Res.pv.length >= 4, `Expected full PV line (>= 4 plies) at final depth, got ${e4Res.pv.join(' ')}`);
 });
 
+test('WASM & Native reject dubious opening moves (never f4/e3 after 1.d4 d6 or e3 on startpos), enforce MultiPV monotonicity, and allow 192 Threads & 32768 MB Hash', () => {
+  const engine = getNodeWasmEngineSync();
+  assert.ok(engine);
+  engine.newGame();
+
+  // 1. WASM on 1. d4 d6 -> must play main theory (e2e4, c2c4, g1f3, or b1c3), never f2f4 or e2e3
+  const d4d6Res = engine.search('startpos', 12, 1200, ['d2d4', 'd7d6']);
+  assert.equal(d4d6Res.bestMoveUci, d4d6Res.pv[0]);
+  assert.ok(
+    ['e2e4', 'c2c4', 'g1f3', 'b1c3'].includes(d4d6Res.bestMoveUci),
+    `Expected strong GM response to 1.d4 d6 in WASM, got ${d4d6Res.bestMoveUci} (${d4d6Res.scoreCp} cp)`
+  );
+
+  // 2. Native UCI advertises max Threads=192, Hash=32768, supports T=192, T=4 startpos & 1.d4 d6, and monotonic MultiPV 5
+  const nativeBin = path.resolve(process.cwd(), 'bin/berserker-native');
+  const cachePath = path.resolve(process.cwd(), 'storage/nn-cache', NNUE_FILE);
+  const script = [
+    'uci',
+    `setoption name EvalFile value ${cachePath}`,
+    'setoption name Threads value 4',
+    'setoption name Hash value 64',
+    'isready',
+    'ucinewgame',
+    'position startpos',
+    'go depth 11',
+    'ucinewgame',
+    'position startpos moves d2d4 d7d6',
+    'go depth 11',
+    'setoption name MultiPV value 5',
+    'go depth 9',
+    'setoption name MultiPV value 1',
+    'setoption name Threads value 192',
+    'isready',
+    'quit',
+  ].join('\n') + '\n';
+
+  const res = spawnSync(nativeBin, [], {
+    input: script,
+    encoding: 'utf8',
+    timeout: 25000,
+  });
+
+  assert.equal(res.status, 0, `Native binary exited with ${res.status}: ${res.stderr}`);
+  assert.ok(
+    /option name Threads type spin default 1 min 1 max 192/.test(res.stdout),
+    'Native UCI must advertise Threads max 192'
+  );
+  assert.ok(
+    /option name Hash type spin default 64 min 16 max 32768/.test(res.stdout),
+    'Native UCI must advertise Hash max 32768'
+  );
+
+  const bestMoves = Array.from(res.stdout.matchAll(/^bestmove (\S+)/gm)).map((m) => m[1]);
+  assert.equal(bestMoves.length, 3, `Expected 3 bestmove lines, got ${bestMoves.length}`);
+  assert.ok(
+    ['e2e4', 'd2d4', 'c2c4', 'g1f3', 'b1c3'].includes(bestMoves[0]),
+    `Native startpos T=4 expected sound opening move, got ${bestMoves[0]}`
+  );
+  assert.ok(
+    ['e2e4', 'c2c4', 'g1f3', 'b1c3'].includes(bestMoves[1]),
+    `Native 1.d4 d6 T=4 expected sound continuation, got ${bestMoves[1]}`
+  );
+  assert.notEqual(bestMoves[1], 'f2f4');
+  assert.notEqual(bestMoves[2], 'f2f4');
+
+  // Verify MultiPV 5 depth-9 scores are strictly non-increasing (pv1 >= pv2 >= ... >= pv5)
+  const mpvScores: number[] = [];
+  for (let idx = 1; idx <= 5; idx++) {
+    const matches = Array.from(
+      res.stdout.matchAll(new RegExp(`info depth 9 [^\\n]*multipv ${idx} score cp (-?\\d+)`, 'g'))
+    );
+    const m = matches.pop();
+    assert.ok(m, `Expected MultiPV ${idx} score at depth 9`);
+    mpvScores.push(parseInt(m[1], 10));
+  }
+  for (let i = 1; i < mpvScores.length; i++) {
+    assert.ok(
+      mpvScores[i - 1] >= mpvScores[i],
+      `MultiPV must be monotonic: pv${i}=${mpvScores[i - 1]} < pv${i + 1}=${mpvScores[i]}`
+    );
+  }
+  assert.ok(res.stdout.endsWith('readyok\n') || res.stdout.includes('readyok'));
+});
+
+

@@ -279,9 +279,23 @@ export const useBerserkerEngine = (): UseBerserkerEngineReturn & {
     setRawLogs([]);
   }, []);
 
+  const resetSearchTelemetry = useCallback(() => {
+    bestMoveRef.current = null;
+    searchInfoRef.current = { ...INITIAL_SEARCH_INFO };
+    multiPvMapRef.current.clear();
+    multiPvCandidatesRef.current = [];
+    setBestMove(null);
+    setPonderMove(null);
+    setSearchInfo({ ...INITIAL_SEARCH_INFO });
+    setMultiPvCandidates([]);
+  }, []);
+
   const sendCommand = useCallback((cmd: string) => {
     const trimmed = cmd.trim();
     if (!trimmed || !workerRef.current) return;
+    if (trimmed === 'ucinewgame') {
+      resetSearchTelemetry();
+    }
     if (trimmed.startsWith('go')) {
       outstandingGoRef.current += 1;
       bestMoveRef.current = null;
@@ -290,7 +304,7 @@ export const useBerserkerEngine = (): UseBerserkerEngineReturn & {
       setIsSearching(true);
     }
     workerRef.current.postMessage(trimmed);
-  }, []);
+  }, [resetSearchTelemetry]);
 
   const setOption = useCallback((name: string, value: string | number | boolean) => {
     sendCommand(`setoption name ${name} value ${value}`);
@@ -303,13 +317,13 @@ export const useBerserkerEngine = (): UseBerserkerEngineReturn & {
   }, [setOption]);
 
   const setHashSize = useCallback((mb: number) => {
-    const clamped = Math.max(16, Math.min(2048, mb));
+    const clamped = Math.max(16, Math.min(32768, mb));
     setEngineConfig((prev) => ({ ...prev, hashMb: clamped }));
     setOption('Hash', clamped);
   }, [setOption]);
 
   const setThreads = useCallback((threads: number) => {
-    const clamped = Math.max(1, Math.min(64, threads));
+    const clamped = Math.max(1, Math.min(192, threads));
     setEngineConfig((prev) => ({ ...prev, threads: clamped }));
     setOption('Threads', clamped);
   }, [setOption]);
@@ -326,16 +340,6 @@ export const useBerserkerEngine = (): UseBerserkerEngineReturn & {
     setOption('KingAttackScale', clamped);
   }, [setOption]);
 
-  const resetSearchTelemetry = useCallback(() => {
-    bestMoveRef.current = null;
-    searchInfoRef.current = { ...INITIAL_SEARCH_INFO };
-    multiPvMapRef.current.clear();
-    multiPvCandidatesRef.current = [];
-    setBestMove(null);
-    setPonderMove(null);
-    setSearchInfo({ ...INITIAL_SEARCH_INFO });
-    setMultiPvCandidates([]);
-  }, []);
 
   const startSearch = useCallback((
     fen: string,
@@ -373,7 +377,7 @@ export const useBerserkerEngine = (): UseBerserkerEngineReturn & {
   }, [resetSearchTelemetry]);
 
   const stopSearch = useCallback(() => {
-    if (workerRef.current) {
+    if (workerRef.current && outstandingGoRef.current > 0) {
       workerRef.current.postMessage('stop');
     }
   }, []);

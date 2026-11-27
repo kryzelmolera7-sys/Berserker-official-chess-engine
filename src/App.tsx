@@ -202,7 +202,7 @@ export default function App() {
 
         {/* Tab 4: Engine Board Visualizer */}
         {activeTab === 'board' && (
-          <PlayVsEngine maxThreads={64} hashSizeMb={32768} />
+          <PlayVsEngine maxThreads={192} hashSizeMb={32768} />
         )}
       </main>
 

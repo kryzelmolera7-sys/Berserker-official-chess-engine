@@ -49,7 +49,7 @@ interface PlayVsEngineProps {
 }
 
 export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({ 
-  maxThreads = 64, 
+  maxThreads = 192, 
   hashSizeMb = 32768 
 }) => {
   const [chess] = useState<Chess>(() => new Chess());
@@ -162,7 +162,7 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
   const [currentBookEntry, setCurrentBookEntry] = useState<OpeningBookEntry | null>(() => getOpeningBookMove(chess.fen()));
   const [activeKingSafety, setActiveKingSafety] = useState<KingSafetyMetrics | null>(null);
   const [lastBlendedMove, setLastBlendedMove] = useState<BlendedMoveResult | null>(null);
-  const [contemptFactor, setContemptFactor] = useState<number>(25);
+  const [contemptFactor, setContemptFactor] = useState<number>(0);
 
   // Level 2 Cloud Persistence State
   const [cloudSavedNotice, setCloudSavedNotice] = useState<boolean>(false);
@@ -481,6 +481,7 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
   useEffect(() => {
     if (!isEngineThinking || !isEngineTurn || gameResult) return;
     if (!wasmBestMove || wasmBestMove === '0000') return;
+    if (wasmBestMoveRef.current !== wasmBestMove) return;
     if (moveDispatchedForFenRef.current === fen) return;
     dispatchEngineMove(wasmBestMove);
   }, [wasmBestMove, isEngineThinking, isEngineTurn, gameResult, fen]);
@@ -682,7 +683,7 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
             {/* Live Real Engine Runtime Badge */}
             <div className="flex items-center gap-1.5 bg-purple-500/10 border border-purple-500/30 px-3 py-1.5 rounded-xl text-xs font-mono font-semibold text-purple-300 whitespace-nowrap">
               <span className="w-2 h-2 rounded-full bg-purple-400 animate-pulse" />
-              <span>WASM SIMD128 • 64 MB Hash</span>
+              <span>WASM SIMD128 • 64 MB | Native 192T / 32 GB</span>
             </div>
 
             {/* Time Control Selector */}
@@ -1224,11 +1225,11 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
                           MVV-LVA 2-PLY
                         </span>
                         <button 
-                          onClick={() => setContemptFactor(prev => prev === 75 ? 25 : prev === 25 ? 45 : 75)}
+                          onClick={() => setContemptFactor(prev => prev === 0 ? 25 : prev === 25 ? 45 : 0)}
                           className="px-2 py-0.5 rounded font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 hover:bg-indigo-500/30 transition text-[9px]"
-                          title="Click to cycle Contempt Factor (+25cp, +45cp, +75cp)"
+                          title="Click to cycle Contempt Factor (0cp Pure NNUE, +25cp, +45cp)"
                         >
-                          +{contemptFactor}cp CONTEMPT
+                          {contemptFactor >= 0 ? `+${contemptFactor}` : contemptFactor}cp CONTEMPT
                         </button>
                       </div>
                     </div>

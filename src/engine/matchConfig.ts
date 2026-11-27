@@ -91,15 +91,15 @@ export interface MatchResultPayload {
 
 export function clampMatchRunOptions(
   input: Partial<MatchRunOptions>,
-  maxCpuCores = 4
+  maxCpuCores = 192
 ): MatchRunOptions {
   const pairs = Math.max(1, Math.min(30, Math.round(Number(input.pairs ?? 30)) || 30));
   const minPairs = Math.max(1, Math.min(pairs, Math.round(Number(input.minPairs ?? 10)) || 10));
   const sprt = input.sprt !== false;
   const elo0 = Number.isFinite(Number(input.elo0)) ? Number(input.elo0) : 0;
   const elo1 = Number.isFinite(Number(input.elo1)) ? Number(input.elo1) : 10;
-  const threads = Math.max(1, Math.min(Math.max(1, maxCpuCores), Math.round(Number(input.threads ?? 1)) || 1));
-  const hashMb = Math.max(16, Math.min(1024, Math.round(Number(input.hashMb ?? 64)) || 64));
+  const threads = Math.max(1, Math.min(Math.min(192, Math.max(1, maxCpuCores)), Math.round(Number(input.threads ?? 1)) || 1));
+  const hashMb = Math.max(16, Math.min(32768, Math.round(Number(input.hashMb ?? 64)) || 64));
   const baseMs = Math.max(1000, Math.min(30000, Math.round(Number(input.baseMs ?? 2500)) || 2500));
   const incMs = Math.max(50, Math.min(2000, Math.round(Number(input.incMs ?? 150)) || 150));
   return { pairs, minPairs, sprt, elo0, elo1, threads, hashMb, baseMs, incMs };

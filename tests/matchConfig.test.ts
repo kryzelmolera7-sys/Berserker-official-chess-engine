@@ -36,6 +36,10 @@ test('matchConfig: clamps match options and tallies game terminations accurately
   assert.equal(clamped.baseMs, 1000);
   assert.equal(clamped.incMs, 2000);
 
+  const highSpec = clampMatchRunOptions({ threads: 256, hashMb: 65536 }, 256);
+  assert.equal(highSpec.threads, 192);
+  assert.equal(highSpec.hashMb, 32768);
+
   const terms = tallyTerminations([
     { game1Reason: 'checkmate', game2Reason: 'win-adjudication' },
     { game1Reason: 'checkmate', game2Reason: 'draw-rule' },

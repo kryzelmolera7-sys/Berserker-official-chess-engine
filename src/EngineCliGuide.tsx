@@ -511,6 +511,12 @@ npm run build:native
                 <option value={1}>1 Thread</option>
                 <option value={2}>2 Threads</option>
                 <option value={4}>4 Threads</option>
+                <option value={8}>8 Threads</option>
+                <option value={16}>16 Threads</option>
+                <option value={32}>32 Threads</option>
+                <option value={64}>64 Threads</option>
+                <option value={128}>128 Threads</option>
+                <option value={192}>192 Threads</option>
               </select>
             </label>
 
@@ -526,6 +532,11 @@ npm run build:native
                 <option value={64}>64 MB</option>
                 <option value={128}>128 MB</option>
                 <option value={256}>256 MB</option>
+                <option value={512}>512 MB</option>
+                <option value={1024}>1024 MB (1 GB)</option>
+                <option value={4096}>4096 MB (4 GB)</option>
+                <option value={16384}>16384 MB (16 GB)</option>
+                <option value={32768}>32768 MB (32 GB)</option>
               </select>
             </label>
           </div>

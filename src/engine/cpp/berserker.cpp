@@ -1972,21 +1972,45 @@ static inline void unpack_tt_data(uint64_t d, uint16_t& move, int16_t& score, in
     age    = (uint8_t)((d >> 59) & 31ULL);
 }
 
+[[maybe_unused]] static constexpr int MAX_THREADS_LIMIT = 192;
+[[maybe_unused]] static constexpr int MAX_HASH_MB_LIMIT = 32768;
+
 #ifdef BERSERKER_NATIVE
 static std::vector<TTCluster> g_tt_vec;
 static TTCluster* g_tt = nullptr;
 static size_t g_tt_mask = 0;
 static int g_hash_mb = 64;
 
+static inline uint64_t tt_load_u64(const uint64_t* p) {
+    return __atomic_load_n(p, __ATOMIC_RELAXED);
+}
+
+static inline void tt_store_u64(uint64_t* p, uint64_t v) {
+    __atomic_store_n(p, v, __ATOMIC_RELAXED);
+}
+
 static void resize_tt_mb(int mb) {
-    mb = clamp_i(mb, 16, 2048);
-    g_hash_mb = mb;
+    mb = clamp_i(mb, 16, MAX_HASH_MB_LIMIT);
     size_t target_bytes = (size_t)mb * 1024ULL * 1024ULL;
     size_t n_clusters = 1;
     while ((n_clusters << 1) * sizeof(TTCluster) <= target_bytes) n_clusters <<= 1;
-    g_tt_vec.assign(n_clusters, TTCluster{});
+
+    while (true) {
+        try {
+            g_tt_vec.assign(n_clusters, TTCluster{});
+            break;
+        } catch (const std::bad_alloc&) {
+            g_tt_vec.clear();
+            g_tt_vec.shrink_to_fit();
+            if (n_clusters <= (1ULL << 18)) throw;
+            n_clusters >>= 1;
+        }
+    }
+
     g_tt = g_tt_vec.data();
     g_tt_mask = n_clusters - 1;
+    size_t actual_mb = (n_clusters * sizeof(TTCluster)) / (1024ULL * 1024ULL);
+    g_hash_mb = (int)actual_mb;
 }
 
 static inline void clear_tt() {
@@ -1997,6 +2021,9 @@ static constexpr size_t WASM_TT_CLUSTERS = 1ULL << 20; // 1M clusters * 64B = 64
 static TTCluster g_tt[WASM_TT_CLUSTERS];
 static constexpr size_t g_tt_mask = WASM_TT_CLUSTERS - 1;
 [[maybe_unused]] static int g_hash_mb = 64;
+
+static inline uint64_t tt_load_u64(const uint64_t* p) { return *p; }
+static inline void tt_store_u64(uint64_t* p, uint64_t v) { *p = v; }
 
 static inline void clear_tt() {
     memset(g_tt, 0, sizeof(g_tt));
@@ -2009,8 +2036,8 @@ static inline bool tt_probe(uint64_t key, uint16_t& move, int& score, int16_t& e
                             int& depth, int& bound, bool& was_pv) {
     const TTCluster& cl = g_tt[key & g_tt_mask];
     for (int i = 0; i < 4; ++i) {
-        uint64_t d = cl.slot[i].data;
-        uint64_t k = cl.slot[i].key_xor_data ^ d;
+        uint64_t d = tt_load_u64(&cl.slot[i].data);
+        uint64_t k = tt_load_u64(&cl.slot[i].key_xor_data) ^ d;
         if (k == key && ((d >> 56) & 3ULL) != TT_NONE) {
             uint8_t age;
             int16_t sc16;
@@ -2030,8 +2057,8 @@ static inline void tt_store(uint64_t key, int depth, int score, int bound, uint1
     uint16_t preserved_move = 0;
 
     for (int i = 0; i < 4; ++i) {
-        uint64_t d = cl.slot[i].data;
-        uint64_t k = cl.slot[i].key_xor_data ^ d;
+        uint64_t d = tt_load_u64(&cl.slot[i].data);
+        uint64_t k = tt_load_u64(&cl.slot[i].key_xor_data) ^ d;
         int b = (int)((d >> 56) & 3ULL);
         if (b == TT_NONE || k == key) {
             uint16_t old_m = (uint16_t)(d & 0xFFFFULL);
@@ -2059,8 +2086,8 @@ static inline void tt_store(uint64_t key, int depth, int score, int bound, uint1
     uint16_t final_move = move ? move : preserved_move;
     uint64_t nd = pack_tt_data(final_move, (int16_t)clamp_i(score, -30000, 30000),
                                eval, depth, bound, was_pv, g_tt_age);
-    cl.slot[replace_idx].key_xor_data = key ^ nd;
-    cl.slot[replace_idx].data = nd;
+    tt_store_u64(&cl.slot[replace_idx].key_xor_data, key ^ nd);
+    tt_store_u64(&cl.slot[replace_idx].data, nd);
 }
 
 static inline int tt_hashfull() {
@@ -2068,11 +2095,12 @@ static inline int tt_hashfull() {
     if (!g_tt) return 0;
 #endif
     int used = 0;
-    int sample_clusters = min_i(250, (int)g_tt_mask + 1);
+    size_t total_clusters = g_tt_mask + 1ULL;
+    int sample_clusters = (int)(total_clusters < 250ULL ? total_clusters : 250ULL);
     for (int i = 0; i < sample_clusters; ++i) {
         const TTCluster& cl = g_tt[i];
         for (int j = 0; j < 4; ++j) {
-            uint64_t d = cl.slot[j].data;
+            uint64_t d = tt_load_u64(&cl.slot[j].data);
             int b = (int)((d >> 56) & 3ULL);
             uint8_t a = (uint8_t)((d >> 59) & 31ULL);
             if (b != TT_NONE && a == g_tt_age) used++;
@@ -2158,6 +2186,13 @@ struct SearchWorker {
         memset(cap_hist, 0, sizeof(cap_hist));
         memset(pawn_corr, 0, sizeof(pawn_corr));
         memset(nonpawn_corr, 0, sizeof(nonpawn_corr));
+        for (int i = 0; i < MAX_PLY; ++i) {
+            eval_stack[i] = VALUE_NONE;
+            moved_piece[i] = -1;
+            move_to[i] = -1;
+            pv_len[i] = 0;
+            double_exts[i] = 0;
+        }
         nmp_min_ply = 0;
     }
 
@@ -2457,7 +2492,7 @@ struct SearchWorker {
         if (!is_pv && !in_check && excluded_move == 0) {
             // Reverse Futility Pruning (improving-aware, never prune TT-PV nodes)
             if (!tt_pv && depth <= 7 && abs_i(beta) < MATE_BOUND) {
-                int margin = (90 - 20 * (int)improving) * depth;
+                int margin = 110 * depth - 25 * (int)improving;
                 if (static_eval - margin >= beta) {
                     return beta + (static_eval - margin - beta) / 3;
                 }
@@ -2637,8 +2672,8 @@ struct SearchWorker {
                 } else if (!is_pv && tt_score >= beta && depth >= 8) {
                     ext = -1; // Conservative negative extension (non-PV only)
                 }
-            } else if (gives_check && ply < MAX_PLY - 4 && (in_check || board.static_exchange_eval(move) >= 0) &&
-                       (ply < MAX_PLY && double_exts[ply] <= 6)) {
+            } else if (gives_check && depth >= 2 && ply < MAX_PLY - 4 && ply < depth * 2 &&
+                       (in_check || board.static_exchange_eval(move) >= 0)) {
                 ext = 1;
             }
 
@@ -2792,6 +2827,11 @@ struct SearchWorker {
     int search_root_iteration(int depth, int multipv_lines, int* out_scores,
                               uint16_t out_pvs[][MAX_PLY], int* out_pv_lens) {
         aborted = false;
+        eval_stack[0] = board.in_check() ? VALUE_NONE : adjust_eval_with_corr(raw_eval_node());
+        double_exts[0] = 0;
+        moved_piece[0] = -1;
+        move_to[0] = -1;
+
         int lines = min_i(multipv_lines, root_cnt);
 
         // Order root_moves using TT move boost before depth 1 or stable previous score
@@ -2804,7 +2844,13 @@ struct SearchWorker {
         if (depth == 1) {
             int p1 = -1, t1 = -1, p2 = -1, t2 = -1;
             for (int i = 0; i < root_cnt; ++i) {
-                root_moves[i].score = score_move(root_moves[i].move, tt_move, 0, p1, t1, p2, t2);
+                int sc_ord = score_move(root_moves[i].move, tt_move, 0, p1, t1, p2, t2);
+                if (thread_id > 0 && root_moves[i].move != tt_move) {
+                    uint32_t h = (uint32_t)root_moves[i].move * 2654435761U ^ (uint32_t)thread_id * 1103515245U;
+                    sc_ord += (int)((h >> 24) & 31U) - 16;
+                }
+                root_moves[i].score = sc_ord;
+                root_moves[i].prev_score = 0;
             }
             for (int i = 0; i < root_cnt; ++i) {
                 for (int j = i + 1; j < root_cnt; ++j) {
@@ -2817,12 +2863,12 @@ struct SearchWorker {
 
         int pvs_done = 0;
         for (int pv_idx = 0; pv_idx < lines; ++pv_idx) {
-            // Re-sort remaining root moves [pv_idx .. root_cnt - 1] by previous depth score (with TT boost)
+            // Re-sort remaining root moves [pv_idx .. root_cnt - 1] by previous depth's verified score
             if (depth >= 2) {
                 for (int i = pv_idx; i < root_cnt; ++i) {
                     for (int j = i + 1; j < root_cnt; ++j) {
-                        int si = root_moves[i].prev_score + (root_moves[i].move == tt_move ? 200 : 0);
-                        int sj = root_moves[j].prev_score + (root_moves[j].move == tt_move ? 200 : 0);
+                        int si = root_moves[i].prev_score + (pv_idx == 0 && root_moves[i].move == tt_move ? 2000 : 0);
+                        int sj = root_moves[j].prev_score + (pv_idx == 0 && root_moves[j].move == tt_move ? 2000 : 0);
                         if (sj > si) {
                             RootMove tmp = root_moves[i]; root_moves[i] = root_moves[j]; root_moves[j] = tmp;
                         }
@@ -2830,18 +2876,24 @@ struct SearchWorker {
                 }
             }
 
-            int delta = 22;
+            int delta = 24;
             int prev_sc = root_moves[pv_idx].prev_score;
-            int alpha = (depth >= 5) ? max_i(-INF_SCORE, prev_sc - delta) : -INF_SCORE;
-            int beta  = (depth >= 5) ? min_i(INF_SCORE,  prev_sc + delta) : INF_SCORE;
+            int alpha = (depth >= 5 && abs_i(prev_sc) < MATE_BOUND) ? max_i(-INF_SCORE, prev_sc - delta) : -INF_SCORE;
+            int beta  = (depth >= 5 && abs_i(prev_sc) < MATE_BOUND) ? min_i(INF_SCORE,  prev_sc + delta) : INF_SCORE;
 
             int best_idx = pv_idx;
             int best_value = -INF_SCORE;
+            bool move_reduced[MAX_MOVES];
 
             while (true) {
                 best_value = -INF_SCORE;
                 best_idx = pv_idx;
                 int cur_alpha = alpha;
+
+                for (int r = pv_idx; r < root_cnt; ++r) {
+                    root_moves[r].score = -INF_SCORE;
+                    move_reduced[r] = false;
+                }
 
                 for (int r = pv_idx; r < root_cnt; ++r) {
                     uint16_t rm = root_moves[r].move;
@@ -2861,11 +2913,15 @@ struct SearchWorker {
                         int red = 0;
                         int mtype = mv_type(rm), mpromo = mv_promo(rm);
                         bool cap = (mtype == MT_EN_PASSANT) || (board.undo[board.undo_top - 1].captured != EMPTY_SQ);
-                        if (depth >= 3 && r >= pv_idx + 2 && !cap && mpromo != PT_QUEEN && !gives_check) {
-                            red = clamp_i(LMR_TABLE[min_i(depth, 63)][min_i(r - pv_idx + 1, 63)] - 1, 0, max_i(0, nd - 1));
+                        // Never reduce top 6 root candidates or any MultiPV candidate; only tiny 1-ply reduction deep in tail moves
+                        if (multipv_lines == 1 && depth >= 8 && r >= pv_idx + 6 && !cap && mpromo != PT_QUEEN && !gives_check &&
+                            history[board.turn][mv_from(rm)][mv_to(rm)] <= 0) {
+                            red = 1;
+                            move_reduced[r] = true;
                         }
                         sc = -pvs(nd - red, 1, -cur_alpha - 1, -cur_alpha, 0, true, false);
                         if (!aborted && sc > cur_alpha && red > 0) {
+                            move_reduced[r] = false;
                             sc = -pvs(nd, 1, -cur_alpha - 1, -cur_alpha, 0, false, false);
                         }
                         if (!aborted && sc > cur_alpha) {
@@ -2880,7 +2936,6 @@ struct SearchWorker {
                         best_value = sc;
                         best_idx = r;
                         root_moves[r].score = sc;
-                        root_moves[r].prev_score = sc;
                         root_moves[r].pv[0] = rm;
                         int clen = pv_len[1];
                         for (int k = 0; k < clen; ++k) root_moves[r].pv[1 + k] = pv_table[1][k];
@@ -2890,8 +2945,6 @@ struct SearchWorker {
                             cur_alpha = sc;
                         }
                         if (sc >= beta) break;
-                    } else if (sc > -MATE_BOUND) {
-                        root_moves[r].prev_score = sc;
                     }
                 }
 
@@ -2900,8 +2953,13 @@ struct SearchWorker {
                 // Promote newly found best move to pv_idx before widening when beating alpha (never on fail-low)
                 if (best_idx != pv_idx && best_value > alpha) {
                     RootMove tmp = root_moves[best_idx];
-                    for (int r = best_idx; r > pv_idx; --r) root_moves[r] = root_moves[r - 1];
+                    bool tmp_red = move_reduced[best_idx];
+                    for (int r = best_idx; r > pv_idx; --r) {
+                        root_moves[r] = root_moves[r - 1];
+                        move_reduced[r] = move_reduced[r - 1];
+                    }
                     root_moves[pv_idx] = tmp;
+                    move_reduced[pv_idx] = tmp_red;
                     best_idx = pv_idx;
                 }
 
@@ -2915,20 +2973,32 @@ struct SearchWorker {
                 } else {
                     break;
                 }
-                if (alpha <= -20000 && beta >= 20000) {
-                    alpha = -INF_SCORE;
-                    beta = INF_SCORE;
-                }
+                if (delta > 400 || alpha <= -4000) alpha = -INF_SCORE;
+                if (delta > 400 || beta >= 4000) beta = INF_SCORE;
             }
 
             if (aborted) break;
 
             if (best_idx != pv_idx) {
                 RootMove tmp = root_moves[best_idx];
-                for (int r = best_idx; r > pv_idx; --r) root_moves[r] = root_moves[r - 1];
+                bool tmp_red = move_reduced[best_idx];
+                for (int r = best_idx; r > pv_idx; --r) {
+                    root_moves[r] = root_moves[r - 1];
+                    move_reduced[r] = move_reduced[r - 1];
+                }
                 root_moves[pv_idx] = tmp;
+                move_reduced[pv_idx] = tmp_red;
             }
+
+            // Update prev_score cleanly ONLY after aspiration converged without abort
             root_moves[pv_idx].prev_score = best_value;
+            for (int r = pv_idx + 1; r < root_cnt; ++r) {
+                if (root_moves[r].score > -MATE_BOUND) {
+                    root_moves[r].prev_score = root_moves[r].score;
+                } else if (!move_reduced[r] && root_moves[r].prev_score >= best_value) {
+                    root_moves[r].prev_score = best_value - 1;
+                }
+            }
 
             out_scores[pv_idx] = best_value;
             out_pv_lens[pv_idx] = root_moves[pv_idx].pv_len;
@@ -2936,6 +3006,23 @@ struct SearchWorker {
                 out_pvs[pv_idx][k] = root_moves[pv_idx].pv[k];
             }
             pvs_done++;
+        }
+
+        // Enforce strict MultiPV score monotonicity (multipv 1 >= multipv 2 >= ...)
+        if (!aborted && pvs_done > 1) {
+            for (int i = 0; i < pvs_done; ++i) {
+                for (int j = i + 1; j < pvs_done; ++j) {
+                    if (out_scores[j] > out_scores[i]) {
+                        int ts = out_scores[i]; out_scores[i] = out_scores[j]; out_scores[j] = ts;
+                        int tl = out_pv_lens[i]; out_pv_lens[i] = out_pv_lens[j]; out_pv_lens[j] = tl;
+                        int mlen = max_i(out_pv_lens[i], out_pv_lens[j]);
+                        for (int k = 0; k < mlen; ++k) {
+                            uint16_t tm = out_pvs[i][k]; out_pvs[i][k] = out_pvs[j][k]; out_pvs[j][k] = tm;
+                        }
+                        RootMove trm = root_moves[i]; root_moves[i] = root_moves[j]; root_moves[j] = trm;
+                    }
+                }
+            }
         }
 
         if (!aborted && pvs_done > 0) {
@@ -2976,7 +3063,7 @@ static std::vector<std::unique_ptr<SearchWorker>> g_workers;
 static Board g_board;
 
 static SearchWorker* ensure_workers(int count) {
-    count = clamp_i(count, 1, 64);
+    count = clamp_i(count, 1, MAX_THREADS_LIMIT);
     while ((int)g_workers.size() < count) {
         auto w = std::make_unique<SearchWorker>();
         w->thread_id = (int)g_workers.size();
@@ -3251,10 +3338,11 @@ int wasm_search_step() {
 static void native_run_smp_search(int max_depth, int max_time_ms, bool infinite) {
     if (!wasm_search_begin(max_depth, max_time_ms, infinite)) return;
 
-    int num_threads = clamp_i(g_threads, 1, 64);
+    int num_threads = clamp_i(g_threads, 1, MAX_THREADS_LIMIT);
     ensure_workers(num_threads);
 
     std::vector<std::thread> helpers;
+    helpers.reserve((size_t)(num_threads > 0 ? num_threads - 1 : 0));
     for (int tid = 1; tid < num_threads; ++tid) {
         SearchWorker* hw = g_workers[tid].get();
         hw->board = g_board;
@@ -3269,7 +3357,10 @@ static void native_run_smp_search(int max_depth, int max_time_ms, bool infinite)
             int out_sc[8];
             uint16_t out_pvs[8][MAX_PLY];
             int out_len[8];
-            for (int hd = 1 + (tid % 2); hd <= max_depth && !hw->aborted && !g_stop_requested.load(std::memory_order_relaxed); ++hd) {
+            int start_d = 1 + (tid & 3);
+            if (start_d > max_depth) start_d = 1;
+            for (int hd = start_d; hd <= max_depth && !hw->aborted && !g_stop_requested.load(std::memory_order_relaxed); ++hd) {
+                if (hd > 3 && ((hd + tid) % 7) == 0 && hd < max_depth) continue;
                 hw->search_root_iteration(hd, 1, out_sc, out_pvs, out_len);
                 if (g_stop_requested.load(std::memory_order_relaxed)) break;
             }
@@ -3510,8 +3601,8 @@ int wasm_exec_uci(int len) {
         emit_line("id name Berserker v0.7.0");
         emit_line("id author Berserker Engine Team");
 #ifdef BERSERKER_NATIVE
-        emit_line("option name Threads type spin default 1 min 1 max 64");
-        emit_line("option name Hash type spin default 64 min 16 max 2048");
+        emit_line("option name Threads type spin default 1 min 1 max 192");
+        emit_line("option name Hash type spin default 64 min 16 max 32768");
 #else
         emit_line("option name Threads type spin default 1 min 1 max 1");
         emit_line("option name Hash type spin default 64 min 64 max 64");
@@ -3565,7 +3656,7 @@ int wasm_exec_uci(int len) {
                 g_contempt = clamp_i(parse_int_tok(tok[val_idx], tlen[val_idx]), -100, 100);
 #ifdef BERSERKER_NATIVE
             } else if (str_eq(tok[name_idx], tlen[name_idx], "Threads")) {
-                g_threads = clamp_i(parse_int_tok(tok[val_idx], tlen[val_idx]), 1, 64);
+                g_threads = clamp_i(parse_int_tok(tok[val_idx], tlen[val_idx]), 1, MAX_THREADS_LIMIT);
                 ensure_workers(g_threads);
             } else if (str_eq(tok[name_idx], tlen[name_idx], "Hash")) {
                 resize_tt_mb(parse_int_tok(tok[val_idx], tlen[val_idx]));
