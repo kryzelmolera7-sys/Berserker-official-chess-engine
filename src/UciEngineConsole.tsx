@@ -37,8 +37,8 @@ export const UciEngineConsole: React.FC = () => {
   const [activeEvalMode, setActiveEvalMode] = useState<'brnnue-v030' | 'berserker-1.0-nnue' | 'aura-nnue'>('brnnue-v030');
   const [customFen, setCustomFen] = useState<string>('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
   const [localLogs, setLocalLogs] = useState<string[]>([
-    'Berserker v0.7.0 C++20 WebAssembly Engine Initializing...',
-    'Neural Network: Auto-Loaded SF-Arch NNUE (nn-bddd9d57eb87.nnue • 138.4 MB) • IndexedDB + GitHub Raw Stream',
+    'Reckless v0.10.0-dev (Rust) WebAssembly Engine Initializing...',
+    'Neural Network: Auto-Loaded Reckless NNUE (v60-7f587dfb.nnue • 60.3 MB) • IndexedDB + GitHub Raw Stream',
     `Raw NNUE URL: ${NNUE_RAW_DOWNLOAD_URL}`,
     'Type UCI commands below or click quick-actions.',
     '--------------------------------------------------------------------------------'
@@ -95,12 +95,12 @@ export const UciEngineConsole: React.FC = () => {
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40">
-              Berserker v0.7.0-wasm
+              <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40">
+              Reckless v0.10.0-dev
             </span>
             <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
               {isNnueReady
-                ? 'NNUE Active (138.4MB SIMD)'
+                ? 'NNUE Active (60.3MB SIMD)'
                 : nnueProgress !== null
                 ? `Auto-Loading NNUE (${nnueProgress}%)...`
                 : isReady
@@ -116,10 +116,10 @@ export const UciEngineConsole: React.FC = () => {
             Standalone UCI Engine Terminal
           </h2>
           <p className="text-xs text-slate-400">
-            Raw UCI console • Auto-loads nn-bddd9d57eb87.nnue (138.4 MB) via{' '}
+            Raw UCI console • Auto-loads v60-7f587dfb.nnue (60.3 MB) via{' '}
             <a
               href={NNUE_RAW_DOWNLOAD_URL}
-              download="nn-bddd9d57eb87.nnue"
+              download="v60-7f587dfb.nnue"
               className="text-purple-300 underline hover:text-purple-200"
             >
               GitHub Raw Link
@@ -134,7 +134,7 @@ export const UciEngineConsole: React.FC = () => {
             onClick={() => {
               setActiveEvalMode('brnnue-v030');
               setOption('EvalMode', 'brnnue-v030');
-              setLocalLogs((p) => [...p, '[UCI] Evaluator: Auto-Loaded SF-Arch NNUE (nn-bddd9d57eb87.nnue WASM SIMD)']);
+              setLocalLogs((p) => [...p, '[UCI] Evaluator: Auto-Loaded Reckless NNUE (v60-7f587dfb.nnue WASM SIMD)']);
             }}
             className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold transition flex items-center gap-1.5 ${
               activeEvalMode === 'brnnue-v030'
@@ -143,7 +143,7 @@ export const UciEngineConsole: React.FC = () => {
             }`}
           >
             <Cpu className="w-3.5 h-3.5" />
-            NNUE (138.4MB)
+            NNUE (60.3MB)
           </button>
           <button
             onClick={() => {
@@ -225,7 +225,7 @@ export const UciEngineConsole: React.FC = () => {
           {allLogs.map((logLine, idx) => {
             const isUserCmd = logLine.startsWith('>');
             const isBestMove = logLine.startsWith('bestmove');
-            const isNnueInfo = logLine.startsWith('info string NNUE') || logLine.includes('nn-bddd9d57eb87.nnue');
+            const isNnueInfo = logLine.startsWith('info string NNUE') || logLine.includes('v60-7f587dfb.nnue');
             const isInfo = logLine.startsWith('info');
             const isReady = logLine.includes('readyok') || logLine.includes('uciok');
             const isEval = isNnueInfo || logLine.includes('[Berserker') || logLine.includes('[AURA-NNUE]');

@@ -82,13 +82,14 @@ test(`Embedded / Reckless NNUE loads actual binary weights and evaluates positio
     return;
   }
 
-  // External 63 MB file was superseded by auto-loaded 138.4 MB nn-bddd9d57eb87.nnue inside WASM
+  // Auto-loaded 60.3 MB v60-7f587dfb.nnue inside Reckless WASM
   await ensureNodeNnueCachedAsync();
   const wasm = getNodeWasmEngineSync();
-  assert.ok(wasm && wasm.isNnueLoaded(), 'Expected auto-loaded 138.4 MB NNUE in WASM');
-  assert.equal(wasm.evaluateFen('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'), 20);
-  assert.ok(wasm.evaluateFen('rnb1kbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1') > 1000);
-  assert.ok(wasm.evaluateFen('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNB1KBNR w KQkq - 0 1') < -700);
+  assert.ok(wasm && wasm.isNnueLoaded(), 'Expected auto-loaded 60.3 MB v60-7f587dfb.nnue in WASM');
+  const startCp = wasm.evaluateFen('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
+  assert.ok(startCp > 0 && startCp < 120, `Expected balanced startpos eval, got ${startCp}`);
+  assert.ok(wasm.evaluateFen('rnb1kbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1') > 350);
+  assert.ok(wasm.evaluateFen('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNB1KBNR w KQkq - 0 1') < -300);
 });
 
 test('NNUE incremental accumulator matches full refresh bit-for-bit across tactical trees', async () => {

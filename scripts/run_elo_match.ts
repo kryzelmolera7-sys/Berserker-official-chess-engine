@@ -110,7 +110,7 @@ async function main() {
   const timeControlLabel = `${(opts.baseMs / 1000).toFixed(1)}+${(opts.incMs / 1000).toFixed(2)}s`;
   const hardwareSummary = formatMatchHardwareSummary(opts.threads, opts.hashMb);
 
-  console.log(`Starting Berserker v0.7.0 (138.4MB NNUE) vs Berserker v0.6.0 Match`);
+  console.log(`Starting Reckless v0.10.0-dev (60.3MB NNUE) vs Berserker v0.6.0 Match`);
   console.log(`Hardware | ${hardwareSummary} (Host: ${cpuCores} Threads, ${(totalRamMb / 1024).toFixed(1)} GiB RAM)`);
   console.log(
     `Conf     | ${timeControlLabel} | Min=${minPairs * 2} games (${minPairs} pairs), SPRT [${opts.elo0.toFixed(2)}, ${opts.elo1.toFixed(2)}] up to ${opts.pairs * 2} games | Workers=${effectiveWorkers}`
@@ -282,7 +282,7 @@ async function main() {
   console.log('===================================================================\n');
 
   const payload: MatchResultPayload = {
-    candidate: 'Berserker v0.7.0 (C++20 Pure-PVS + 138.4MB NNUE)',
+    candidate: 'Reckless v0.10.0-dev (Rust Pure-PVS + 60.3MB NNUE)',
     baseline: 'Berserker v0.6.0',
     baselineUrl: BASELINE_V060_RELEASE_URL,
     nnueFile: NNUE_FILE,

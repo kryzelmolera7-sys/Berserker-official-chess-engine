@@ -51,8 +51,9 @@ function getCliWasmEngine() {
     }
     const wasmBytes = fs.readFileSync(wasmPath);
     const candidateNnuePaths = [
-      path.resolve(__cliDir, 'storage/nn-cache/nn-bddd9d57eb87.nnue'),
-      path.resolve(__cliDir, 'nn-bddd9d57eb87.nnue'),
+      path.resolve(__cliDir, 'storage/nn-cache/v60-7f587dfb.nnue'),
+      path.resolve(__cliDir, 'reckless/networks/v60-7f587dfb.nnue'),
+      path.resolve(__cliDir, 'v60-7f587dfb.nnue'),
     ];
     const nnuePath = candidateNnuePaths.find((p) => fs.existsSync(p)) || null;
     const nnueBytes = nnuePath ? fs.readFileSync(nnuePath) : null;

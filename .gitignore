@@ -8,4 +8,5 @@ coverage/
 !.env.example
 storage/nn-cache/
 public/nnue/*.nnue
-
+reckless/target/
+reckless/networks/

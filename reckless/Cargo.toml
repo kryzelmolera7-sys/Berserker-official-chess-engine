@@ -1,0 +1,32 @@
+[package]
+name = "reckless"
+version = "0.10.0-dev"
+edition = "2024"
+build = "build/build.rs"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+syzygy = ["dep:cc", "dep:bindgen"]
+spsa = []
+
+[profile.dev]
+opt-level = 3
+debug = true
+debug-assertions = true
+
+[profile.release]
+lto = "fat"
+panic = "abort"
+codegen-units = 1
+strip = "symbols"
+
+[build-dependencies]
+cc = { version = "1.2.19", optional = true }
+bindgen = { version = "0.71.1", optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+libc = "0.2.175"

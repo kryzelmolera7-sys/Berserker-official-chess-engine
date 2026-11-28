@@ -130,7 +130,7 @@ export const EngineCliGuide: React.FC = () => {
   const hwThreads = activeData?.threads ?? selectedThreads;
   const hwHashMb = activeData?.hashMb ?? selectedHashMb;
 
-  const terminalRunSnippet = `# 1. Run Berserker v0.7.0 Native C++20 Engine directly via Terminal:
+  const terminalRunSnippet = `# 1. Run Reckless v0.10.0-dev (Berserker) Native Rust Engine directly via Terminal:
 ./bin/berserker-native
 
 # Or run via Node.js WASM UCI bridge:
@@ -140,7 +140,7 @@ node berserker-cli.js
 uci
 setoption name Threads value ${hwThreads}
 setoption name Hash value ${hwHashMb}
-setoption name EvalFile value storage/nn-cache/nn-bddd9d57eb87.nnue
+setoption name EvalFile value storage/nn-cache/v60-7f587dfb.nnue
 isready
 position startpos moves e2e4 e7e5
 eval
@@ -359,10 +359,10 @@ const evalCp = evaluatePosition(chess);
 const result = searchBestMove(chess, 10, 1500);
 console.log('NNUE Eval:', evalCp, 'cp | Best:', result.bestMoveUci);`;
 
-  const cppSnippet = `# Compile native C++20 Lazy SMP UCI binary:
+  const cppSnippet = `# Compile native Rust Lazy SMP UCI binary (no Syzygy, Threads >= 192, Hash >= 32 GB):
 npm run build:native
 
-# Run native engine (auto-loads 138.4 MB nn-bddd9d57eb87.nnue):
+# Run native engine (auto-loads 60.3 MB v60-7f587dfb.nnue):
 ./bin/berserker-native`;
 
   return (
@@ -373,7 +373,7 @@ npm run build:native
           <div className="space-y-2">
             <div className="flex flex-wrap items-center gap-2">
               <span className="px-2.5 py-0.5 rounded-md bg-purple-500/20 text-purple-300 font-mono text-xs font-bold border border-purple-500/40 uppercase">
-                Berserker v0.7.0 (138.4 MB NNUE) vs v0.6.0
+                Reckless v0.10.0-dev (60.3 MB NNUE) vs v0.6.0
               </span>
               {activeSprt && (
                 <span
@@ -394,7 +394,7 @@ npm run build:native
               Pentanomial + SPRT Head-to-Head Match vs Berserker v0.6.0
             </h2>
             <p className="text-sm text-slate-300 max-w-2xl leading-relaxed">
-              Live UCI match comparing <code className="text-purple-300 font-mono">Berserker v0.7.0</code> (C++20 Pure-PVS + auto-loaded <code className="text-emerald-300 font-mono">nn-bddd9d57eb87.nnue</code>) against the older{' '}
+              Live UCI match comparing <code className="text-purple-300 font-mono">Reckless v0.10.0-dev</code> (Rust Pure-PVS + auto-loaded <code className="text-emerald-300 font-mono">v60-7f587dfb.nnue</code>) against the older{' '}
               <a
                 href={BASELINE_V060_RELEASE_URL}
                 target="_blank"
@@ -715,10 +715,10 @@ npm run build:native
           <div>
             <h3 className="text-base font-bold text-white flex items-center gap-2">
               <Cpu className="w-4 h-4 text-amber-400" />
-              Compile Native C++20 Lazy SMP Engine
+              Compile Native Rust Lazy SMP Engine
             </h3>
             <p className="text-xs text-slate-400 mt-0.5">
-              Native binary built from <code className="text-amber-300">src/engine/cpp/berserker.cpp</code>
+              Native binary built from <code className="text-amber-300">reckless/</code> (Cargo release, no Syzygy)
             </p>
           </div>
           <button

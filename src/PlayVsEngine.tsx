@@ -669,13 +669,13 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
             <div className="flex items-center gap-2">
               <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-purple-500/10 text-purple-400 border border-purple-500/20 flex items-center gap-1.5 shadow-sm">
                 <Gem className="w-3.5 h-3.5" />
-                Berserker v0.7.0 Grandmaster Core
+                Reckless v0.10.0-dev (Rust Core)
               </span>
-              <span className="text-xs text-slate-400">Pure-PVS Alpha-Beta &amp; Auto-Loaded 138.4 MB NNUE</span>
+              <span className="text-xs text-slate-400">Pure-PVS Alpha-Beta &amp; Auto-Loaded 60.3 MB NNUE</span>
             </div>
-            <h3 className="text-xl font-bold text-white mt-1">Play Against Berserker v0.7.0</h3>
+            <h3 className="text-xl font-bold text-white mt-1">Play Against Reckless v0.10.0-dev</h3>
             <p className="text-xs text-slate-400 mt-0.5">
-              C++20 WASM SIMD128 • Pure-PVS Alpha-Beta • Auto-Loaded SF-Arch NNUE (138.4 MB)
+              Rust WASM SIMD128 • Pure-PVS Alpha-Beta • Auto-Loaded Reckless NNUE (60.3 MB)
             </p>
           </div>
 
@@ -764,7 +764,7 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="font-bold text-sm text-white">
-                        Berserker v0.7.0 (C++20 WASM + 138.4MB NNUE)
+                        Reckless v0.10.0-dev (Rust WASM + 60.3MB NNUE)
                       </span>
                       <span className="text-[10px] px-2 py-0.5 rounded font-mono font-bold bg-purple-500/10 text-purple-300 border border-purple-500/30">
                         Pure-PVS Alpha-Beta • SIMD128
@@ -780,7 +780,7 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
                       <span>•</span>
                       <span className="text-emerald-400 font-bold">
                         {isNnueReady
-                          ? 'NNUE Ready (138.4 MB)'
+                          ? 'NNUE Ready (60.3 MB)'
                           : nnueProgress !== null
                           ? `Auto-Loading NNUE (${nnueProgress}%)...`
                           : isWasmReady
@@ -825,17 +825,17 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
                   <span className="text-[11px] text-slate-400 font-semibold uppercase tracking-wider whitespace-nowrap">Engine:</span>
                   <div className="px-2.5 py-1 rounded-lg bg-gradient-to-r from-purple-950/90 to-indigo-950/90 border border-purple-500/40 text-purple-200 text-[11px] font-bold font-mono flex items-center gap-1.5 shadow-sm whitespace-nowrap">
                     <Gem className="w-3.5 h-3.5 text-purple-400 shrink-0" />
-                    <span>Berserker v0.7.0-wasm</span>
+                    <span>Reckless v0.10.0-dev-wasm</span>
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-950/60 border border-emerald-500/40 text-[10px] font-mono font-bold text-emerald-300 whitespace-nowrap">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
-                    <span>{isNnueReady ? 'NNUE: nn-bddd9d57eb87.nnue' : `Net: ${activeNetId}`}</span>
+                    <span>{isNnueReady ? 'NNUE: v60-7f587dfb.nnue' : `Net: ${activeNetId}`}</span>
                   </div>
                   <a
                     href={NNUE_RAW_DOWNLOAD_URL}
-                    download="nn-bddd9d57eb87.nnue"
+                    download="v60-7f587dfb.nnue"
                     className="text-[10px] font-mono text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 px-2 py-1 rounded border border-amber-500/30 transition whitespace-nowrap"
                     title="Direct raw NNUE download link from GitHub"
                   >
@@ -1323,9 +1323,9 @@ export const PlayVsEngine: React.FC<PlayVsEngineProps> = ({
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <Terminal className="w-4 h-4 text-purple-400" />
-                <h4 className="font-bold text-sm text-white">Live Berserker v0.7.0-wasm UCI Terminal</h4>
+                <h4 className="font-bold text-sm text-white">Live Reckless v0.10.0-dev WASM UCI Terminal</h4>
                 <span className="text-[10px] font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded">
-                  {isWasmReady && isNnueReady ? 'READY (WASM + 138.4MB NNUE)' : isWasmReady ? 'WASM READY' : 'INITIALIZING'}
+                  {isWasmReady && isNnueReady ? 'READY (WASM + 60.3MB NNUE)' : isWasmReady ? 'WASM READY' : 'INITIALIZING'}
                 </span>
               </div>
               <div className="flex items-center gap-1.5 overflow-x-auto text-xs font-mono">

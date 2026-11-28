@@ -18,14 +18,14 @@ const STORAGE_DIR = path.join(__dirname, 'storage');
 const STATE_FILE = path.join(STORAGE_DIR, 'berserker_24x7_pipeline.json');
 const NATIVE_BIN = path.join(__dirname, 'bin', 'berserker-native');
 
-const EMBEDDED_NNUE_FILE = 'nn-bddd9d57eb87.nnue';
-const EMBEDDED_NNUE_BYTES = 138360528;
+const EMBEDDED_NNUE_FILE = 'v60-7f587dfb.nnue';
+const EMBEDDED_NNUE_BYTES = 63266880;
 const NNUE_RAW_DOWNLOAD_URL =
-  'https://github.com/official-stockfish/networks/raw/master/nn-bddd9d57eb87.nnue';
+  'https://github.com/codedeliveryservice/RecklessNetworks/releases/download/networks/v60-7f587dfb.nnue';
 const NNUE_CDN_DOWNLOAD_URL =
-  'https://media.githubusercontent.com/media/official-stockfish/networks/master/nn-bddd9d57eb87.nnue';
+  'https://github.com/codedeliveryservice/RecklessNetworks/releases/download/networks/v60-7f587dfb.nnue';
 const NNUE_MIRROR_DOWNLOAD_URL =
-  'https://tests.stockfishchess.org/api/nn/nn-bddd9d57eb87.nnue';
+  'https://github.com/codedeliveryservice/RecklessNetworks/releases/download/networks/v60-7f587dfb.nnue';
 const NNUE_CACHE_DIR = path.join(STORAGE_DIR, 'nn-cache');
 const NNUE_CACHE_PATH = path.join(NNUE_CACHE_DIR, EMBEDDED_NNUE_FILE);
 const NATIVE_THREADS = 4;
@@ -63,7 +63,7 @@ async function ensureNnueCachedOnServer(): Promise<string> {
     for (const url of sources) {
       const tmpPath = `${NNUE_CACHE_PATH}.tmp.${Date.now()}`;
       try {
-        console.log(`[Berserker Auto-Loader] Downloading ${EMBEDDED_NNUE_FILE} (138.4 MB) from ${url}`);
+        console.log(`[Reckless Auto-Loader] Downloading ${EMBEDDED_NNUE_FILE} (60.3 MB) from ${url}`);
         const resp = await fetch(url);
         if (!resp.ok || !resp.body) continue;
 
@@ -152,7 +152,7 @@ class NativeBerserkerHost {
       downloadProgressPct: this.nnueLoaded ? 100 : nnueDownloadProgressPct,
       threads: NATIVE_THREADS,
       hashMb: NATIVE_HASH_MB,
-      architecture: 'K32H3 + FullThreats + PP_3Wide (1024x32x32, 92/192 LayerStacks)',
+      architecture: 'Reckless v0.10.0-dev Threat-Input NNUE (66864+7680)->768x2->16->32->8 (SIMD)',
       ready: this.ready,
     };
   }
@@ -683,17 +683,17 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`[Berserker Server] Running on http://localhost:${PORT}`);
-    // Asynchronously pre-warm native C++20 Lazy SMP engine + auto-loaded 138.4 MB NNUE
+    // Asynchronously pre-warm native Reckless v0.10.0-dev Rust SMP engine + auto-loaded NNUE
     nativeEngine
       .boot()
       .then(() => {
         const info = nativeEngine.getInfo();
         console.log(
-          `[Berserker Native] Ready: ${info.nnueFile} (${info.nnueBytes} bytes auto-loaded), Threads=${info.threads}, Hash=${info.hashMb}MB`
+          `[Reckless Native] Ready: ${info.nnueFile} (${info.nnueBytes} bytes auto-loaded), Threads=${info.threads}, Hash=${info.hashMb}MB`
         );
       })
       .catch((err) => {
-        console.warn('[Berserker Native] Pre-warm deferred:', err instanceof Error ? err.message : err);
+        console.warn('[Reckless Native] Pre-warm deferred:', err instanceof Error ? err.message : err);
       });
   });
 

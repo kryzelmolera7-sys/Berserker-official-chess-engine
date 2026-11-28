@@ -66,14 +66,14 @@ export default function App() {
                 Berserker
               </h1>
               <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/40 font-bold uppercase whitespace-nowrap">
-                v0.7.0 Auto-NNUE
+                Reckless v0.10.0-dev
               </span>
               <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-bold hidden sm:inline-block whitespace-nowrap">
-                WASM + 138.4MB NNUE
+                Rust WASM + 60.3MB NNUE
               </span>
             </div>
             <p className="text-[11px] text-slate-400 truncate max-w-full">
-              Standalone C++20 Engine • Pure-PVS &amp; Auto-Loaded 138.4 MB NNUE
+              Reckless v0.10.0-dev Rust Engine • Pure-PVS &amp; Auto-Loaded 60.3 MB NNUE
             </p>
           </div>
         </div>
@@ -214,7 +214,7 @@ export default function App() {
 
       {/* Clean Footer */}
       <footer className="border-t border-slate-900 bg-slate-950/80 px-4 lg:px-8 py-3 text-center text-xs text-slate-500">
-        Berserker v0.7.0 • Battle-Hardened Pure-PVS Alpha-Beta &amp; Auto-Loaded 138.4 MB NNUE (nn-bddd9d57eb87.nnue)
+        Berserker (Reckless v0.10.0-dev Rust) • Pure-PVS Alpha-Beta &amp; Auto-Loaded 60.3 MB NNUE (v60-7f587dfb.nnue)
       </footer>
     </div>
   );

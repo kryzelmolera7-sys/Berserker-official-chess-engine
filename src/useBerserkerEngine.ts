@@ -261,7 +261,6 @@ export const useBerserkerEngine = (): UseBerserkerEngineReturn & {
     };
 
     worker.postMessage('uci');
-    worker.postMessage('setoption name SearchMode value Pure-PVS');
     worker.postMessage('setoption name MultiPV value 1');
     worker.postMessage('isready');
 

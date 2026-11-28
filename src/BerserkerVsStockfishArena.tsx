@@ -379,7 +379,7 @@ export const BerserkerVsStockfishArena: React.FC = () => {
               <span className="text-amber-300">Stockfish 19 FULL</span>
             </h2>
             <p className="text-xs text-slate-300 max-w-3xl leading-relaxed">
-              Real-time grandmaster duel between <span className="text-purple-300 font-semibold">Berserker v0.8.0</span> (Pure-PVS + 138.4MB NNUE + Prophylaxis II) and <span className="text-amber-300 font-semibold">Stockfish 19 FULL</span> (WASM + official 99MB <code className="text-[11px] font-mono bg-slate-950 px-1 py-0.5 rounded">nn-1a298aa575a0.nnue</code>).
+              Real-time grandmaster duel between <span className="text-purple-300 font-semibold">Reckless v0.10.0-dev</span> (Rust Pure-PVS + 60.3MB <code className="text-[11px] font-mono bg-slate-950 px-1 py-0.5 rounded">v60-7f587dfb.nnue</code>) and <span className="text-amber-300 font-semibold">Stockfish 19 FULL</span> (WASM + official 99MB <code className="text-[11px] font-mono bg-slate-950 px-1 py-0.5 rounded">nn-1a298aa575a0.nnue</code>).
             </p>
           </div>
 

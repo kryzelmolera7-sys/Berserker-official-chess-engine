@@ -1,13 +1,12 @@
 /**
- * Berserker C++20 WebAssembly Engine Web Worker
+ * Reckless v0.10.0-dev (Berserker) Rust WebAssembly Engine Web Worker
  *
  * Loads:
- *   1. /berserker-engine.wasm (~120 KB C++20 SIMD128 Pure-PVS engine, no huge embedded weights)
- *   2. Automatic NNUE Loader for nn-bddd9d57eb87.nnue (138,360,528 bytes):
- *      - IndexedDB cache hit (<150ms instant reload on repeat visits)
- *      - Direct Raw Download Link: https://media.githubusercontent.com/media/official-stockfish/networks/master/nn-bddd9d57eb87.nnue
- *      - GitHub Raw Redirect:     https://github.com/official-stockfish/networks/raw/master/nn-bddd9d57eb87.nnue
- *      - Same-Origin Auto Cache:  /api/nnue/nn-bddd9d57eb87.nnue
+ *   1. /berserker-engine.wasm (~200 KB Rust SIMD128 engine, no huge embedded weights)
+ *   2. Automatic NNUE Loader for v60-7f587dfb.nnue (63,266,880 bytes):
+ *      - IndexedDB cache hit (<100ms instant reload on repeat visits)
+ *      - Direct Raw Download Link: https://github.com/codedeliveryservice/RecklessNetworks/releases/download/networks/v60-7f587dfb.nnue
+ *      - Same-Origin Auto Cache:  /api/nnue/v60-7f587dfb.nnue
  *
  * Uses MessageChannel zero-delay scheduling + 16ms time slices so `stop`,
  * `position`, and `quit` respond promptly without 4ms setTimeout clamping.
@@ -18,16 +17,15 @@
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-const NNUE_FILE = 'nn-bddd9d57eb87.nnue';
-const NNUE_EXPECTED_BYTES = 138360528;
+const NNUE_FILE = 'v60-7f587dfb.nnue';
+const NNUE_EXPECTED_BYTES = 63266880;
 const NNUE_CDN_DOWNLOAD_URL =
-  'https://media.githubusercontent.com/media/official-stockfish/networks/master/nn-bddd9d57eb87.nnue';
+  'https://github.com/codedeliveryservice/RecklessNetworks/releases/download/networks/v60-7f587dfb.nnue';
 const NNUE_RAW_DOWNLOAD_URL =
-  'https://github.com/official-stockfish/networks/raw/master/nn-bddd9d57eb87.nnue';
+  'https://github.com/codedeliveryservice/RecklessNetworks/releases/download/networks/v60-7f587dfb.nnue';
 const NNUE_AUTO_SOURCES = [
-  NNUE_CDN_DOWNLOAD_URL,
+  '/api/nnue/v60-7f587dfb.nnue',
   NNUE_RAW_DOWNLOAD_URL,
-  '/api/nnue/nn-bddd9d57eb87.nnue',
 ];
 
 const IDB_NAME = 'berserker-nnue-cache';

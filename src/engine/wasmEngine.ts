@@ -1,20 +1,20 @@
 /**
- * Berserker C++20 WASM Engine Bridge (Node.js & Browser)
+ * Reckless v0.10.0-dev (Rust) WASM Engine Bridge (Node.js & Browser)
  *
- * Instantiates lightweight public/berserker-engine.wasm (<200 KB) and
- * automatically loads the 138,360,528-byte nn-bddd9d57eb87.nnue evaluation
+ * Instantiates lightweight public/berserker-engine.wasm (<512 KB) and
+ * automatically loads the 63,266,880-byte v60-7f587dfb.nnue evaluation
  * network from its direct raw download URL / local runtime cache
- * (`storage/nn-cache/nn-bddd9d57eb87.nnue`).
+ * (`storage/nn-cache/v60-7f587dfb.nnue`).
  */
 
-export const NNUE_FILE = 'nn-bddd9d57eb87.nnue';
-export const NNUE_BYTES = 138360528;
+export const NNUE_FILE = 'v60-7f587dfb.nnue';
+export const NNUE_BYTES = 63266880;
 export const NNUE_RAW_DOWNLOAD_URL =
-  'https://github.com/official-stockfish/networks/raw/master/nn-bddd9d57eb87.nnue';
+  'https://github.com/codedeliveryservice/RecklessNetworks/releases/download/networks/v60-7f587dfb.nnue';
 export const NNUE_CDN_DOWNLOAD_URL =
-  'https://media.githubusercontent.com/media/official-stockfish/networks/master/nn-bddd9d57eb87.nnue';
+  'https://github.com/codedeliveryservice/RecklessNetworks/releases/download/networks/v60-7f587dfb.nnue';
 export const NNUE_MIRROR_DOWNLOAD_URL =
-  'https://tests.stockfishchess.org/api/nn/nn-bddd9d57eb87.nnue';
+  'https://github.com/codedeliveryservice/RecklessNetworks/releases/download/networks/v60-7f587dfb.nnue';
 
 // Backward-compatible aliases for existing imports/tests
 export const EMBEDDED_NNUE_FILE = NNUE_FILE;
@@ -427,7 +427,7 @@ export async function initWasmEngine(
       const wasmModule = await WebAssembly.compile(wasmBuf);
 
       let nnueBytes: Uint8Array | null = null;
-      for (const url of [NNUE_CDN_DOWNLOAD_URL, NNUE_RAW_DOWNLOAD_URL, `/api/nnue/${NNUE_FILE}`]) {
+      for (const url of [`/api/nnue/${NNUE_FILE}`, NNUE_CDN_DOWNLOAD_URL, NNUE_RAW_DOWNLOAD_URL]) {
         try {
           const nnueRes = await fetch(url);
           if (!nnueRes.ok) continue;
